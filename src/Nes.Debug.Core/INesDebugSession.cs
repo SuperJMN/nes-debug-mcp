@@ -4,6 +4,10 @@ public interface INesDebugSession
 {
     DebugResult<LoadRomResult> LoadRom(string path);
 
+    DebugResult<SaveStateResult> SaveState(string path);
+
+    DebugResult<LoadStateResult> LoadState(string path);
+
     DebugResult<ResetResult> Reset();
 
     DebugResult<StepInstructionResult> StepInstruction(int count);
@@ -16,11 +20,21 @@ public interface INesDebugSession
 
     DebugResult<ContinueResult> ContinueUntilBreak(int maxInstructions);
 
-    DebugResult<BreakpointSetResult> SetBreakpoint(ushort address);
+    DebugResult<ContinueResult> StepOver(int maxInstructions);
+
+    DebugResult<ContinueResult> StepOut(int maxInstructions);
+
+    DebugResult<BreakpointSetResult> SetBreakpoint(ushort address, string? condition);
 
     DebugResult<ClearBreakpointResult> ClearBreakpoint(string breakpointId);
 
     DebugResult<ListBreakpointsResult> ListBreakpoints();
+
+    DebugResult<WatchpointSetResult> SetWatchpoint(ushort address, WatchpointMode mode);
+
+    DebugResult<ClearWatchpointResult> ClearWatchpoint(string watchpointId);
+
+    DebugResult<ListWatchpointsResult> ListWatchpoints();
 
     DebugResult<SessionStateResult> GetState();
 
@@ -32,5 +46,23 @@ public interface INesDebugSession
 
     DebugResult<DisassembleResult> Disassemble(ushort address, int instructionCount);
 
+    DebugResult<LoadSymbolsResult> LoadSymbols(string path);
+
+    DebugResult<ResolveSymbolResult> ResolveSymbol(string name);
+
+    DebugResult<ReadSymbolResult> ReadSymbol(string name, int? length);
+
+    DebugResult<OamDumpResult> ReadOam();
+
+    DebugResult<PpuStateResult> ReadPpuState();
+
     DebugResult<ScreenCaptureResult> CaptureScreen();
+
+    DebugResult<LastWriterResult> FindLastWriter(ushort address);
+
+    DebugResult<TraceUntilWriteResult> TraceUntilWrite(ushort address, int maxInstructions);
+
+    DebugResult<TilemapDumpResult> DumpTilemap(ushort address);
+
+    DebugResult<TilesetDumpResult> DumpTileset(ushort address, int tileCount);
 }

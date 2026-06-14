@@ -47,6 +47,54 @@ namespace ADNES.PPU
             };
         }
 
+        public byte[] SnapshotVram() => (byte[])_ppuVram.Clone();
+
+        public byte[] SnapshotPaletteMemory() => (byte[])_paletteMemory.Clone();
+
+        public byte[] SnapshotPatternTables()
+        {
+            var bytes = new byte[0x2000];
+            for (var i = 0; i < bytes.Length; i++)
+            {
+                bytes[i] = ReadByte(i);
+            }
+
+            return bytes;
+        }
+
+        public void RestoreVram(ReadOnlySpan<byte> data)
+        {
+            if (data.Length != _ppuVram.Length)
+            {
+                throw new ArgumentException($"PPU VRAM snapshot must be {_ppuVram.Length} bytes.", nameof(data));
+            }
+
+            data.CopyTo(_ppuVram);
+        }
+
+        public void RestorePaletteMemory(ReadOnlySpan<byte> data)
+        {
+            if (data.Length != _paletteMemory.Length)
+            {
+                throw new ArgumentException($"Palette snapshot must be {_paletteMemory.Length} bytes.", nameof(data));
+            }
+
+            data.CopyTo(_paletteMemory);
+        }
+
+        public void RestorePatternTables(ReadOnlySpan<byte> data)
+        {
+            if (data.Length != 0x2000)
+            {
+                throw new ArgumentException("Pattern table snapshot must be 8192 bytes.", nameof(data));
+            }
+
+            for (var i = 0; i < data.Length; i++)
+            {
+                WriteByte(i, data[i]);
+            }
+        }
+
         /// <summary>
         ///     Write a byte of memory to the specified address.
         /// </summary>

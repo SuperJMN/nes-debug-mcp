@@ -17,6 +17,22 @@ namespace ADNES.CPU
         /// </summary>
         private readonly byte[] _internalRam = new byte[2048];
 
+        public Action<int> ReadObserver { get; set; }
+
+        public Action<int, byte> WriteObserver { get; set; }
+
+        public byte[] SnapshotInternalRam() => (byte[])_internalRam.Clone();
+
+        public void RestoreInternalRam(ReadOnlySpan<byte> data)
+        {
+            if (data.Length != _internalRam.Length)
+            {
+                throw new ArgumentException($"CPU RAM snapshot must be {_internalRam.Length} bytes.", nameof(data));
+            }
+
+            data.CopyTo(_internalRam);
+        }
+
         /// <summary>
         ///     Reads a single byte from the specified offset in the memory address space
         /// </summary>
@@ -24,6 +40,8 @@ namespace ADNES.CPU
         /// <returns></returns>
         public byte ReadByte(int offset)
         {
+            ReadObserver?.Invoke(offset & 0xFFFF);
+
             //2KB internal RAM (+ mirrors)
             if (offset < 0x2000) 
                 return _internalRam[offset % 0x800];
@@ -62,6 +80,8 @@ namespace ADNES.CPU
         /// <param name="data"></param>
         public void WriteByte(int offset, byte data)
         {
+            WriteObserver?.Invoke(offset & 0xFFFF, data);
+
             //2KB internal RAM (+ mirrors)
             if (offset < 0x2000)
             {

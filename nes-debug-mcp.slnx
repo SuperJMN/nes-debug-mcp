@@ -3,6 +3,7 @@
     <Project Path="src/Nes.Debug.Core/Nes.Debug.Core.csproj" />
     <Project Path="src/Nes.Debug.Emulator/Nes.Debug.Emulator.csproj" />
     <Project Path="src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj" />
+    <Project Path="src/Nes.Debug.Symbols/Nes.Debug.Symbols.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Nes.Debug.Tests/Nes.Debug.Tests.csproj" />

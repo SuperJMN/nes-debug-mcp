@@ -95,6 +95,91 @@ namespace ADNES.PPU
         /// </summary>
         public Memory PPUMemory;
 
+        public byte RegisterPpuCtrl => _registerPPUCTRL;
+
+        public byte RegisterPpuMask => _registerPPUMASK;
+
+        public byte RegisterPpuStatus => _registerPPUSTATUS;
+
+        public byte RegisterOamAddr => _registerOAMADDR;
+
+        public int RegisterPpuAddr => _registerPPUADDR;
+
+        public int RegisterPpuScroll => _registerPPUSCROLL;
+
+        public int CurrentCycle => _currentCycle;
+
+        public int CurrentScanline => _currentScanline;
+
+        public byte[] SnapshotOam() => (byte[])_oamData.Clone();
+
+        public PpuCoreState SnapshotState() =>
+            new(
+                _X,
+                _writeOrderToggle,
+                _frameOrderToggle,
+                _registerPPUCTRL,
+                _registerPPUMASK,
+                _registerPPUSTATUS,
+                _registerOAMADDR,
+                _registerPPUADDR,
+                _registerPPUSCROLL,
+                _registerPPUDATABuffer,
+                _tileShiftRegister,
+                _nameTableByte,
+                _attributeTableByte,
+                _tileDataLow,
+                _tileDataHigh,
+                (byte[])_oamData.Clone(),
+                (byte[])_sprites.Clone(),
+                (int[])_spriteIndices.Clone(),
+                _spriteIndex,
+                _countedSprites,
+                (byte[])FrameBuffer.Clone(),
+                _currentCycle,
+                _currentScanline,
+                _scanLineState,
+                _cycleState,
+                Cycles,
+                NMI,
+                PPUMemory.SnapshotPatternTables(),
+                PPUMemory.SnapshotVram(),
+                PPUMemory.SnapshotPaletteMemory());
+
+        public void RestoreState(PpuCoreState state)
+        {
+            _X = state.FineX;
+            _writeOrderToggle = state.WriteOrderToggle;
+            _frameOrderToggle = state.FrameOrderToggle;
+            _registerPPUCTRL = state.PpuCtrl;
+            _registerPPUMASK = state.PpuMask;
+            _registerPPUSTATUS = state.PpuStatus;
+            _registerOAMADDR = state.OamAddr;
+            _registerPPUADDR = state.PpuAddr;
+            _registerPPUSCROLL = state.PpuScroll;
+            _registerPPUDATABuffer = state.PpuDataBuffer;
+            _tileShiftRegister = state.TileShiftRegister;
+            _nameTableByte = state.NameTableByte;
+            _attributeTableByte = state.AttributeTableByte;
+            _tileDataLow = state.TileDataLow;
+            _tileDataHigh = state.TileDataHigh;
+            state.OamData.CopyTo(_oamData, 0);
+            state.Sprites.CopyTo(_sprites, 0);
+            state.SpriteIndices.CopyTo(_spriteIndices, 0);
+            _spriteIndex = state.SpriteIndex;
+            _countedSprites = state.CountedSprites;
+            state.FrameBuffer.CopyTo(FrameBuffer, 0);
+            _currentCycle = state.CurrentCycle;
+            _currentScanline = state.CurrentScanline;
+            _scanLineState = state.ScanLineState;
+            _cycleState = state.CycleState;
+            Cycles = state.Cycles;
+            NMI = state.Nmi;
+            PPUMemory.RestorePatternTables(state.PatternTables);
+            PPUMemory.RestoreVram(state.Vram);
+            PPUMemory.RestorePaletteMemory(state.PaletteMemory);
+        }
+
         /// <summary>
         ///     PPU Constructor
         /// </summary>
@@ -874,4 +959,36 @@ namespace ADNES.PPU
         private void UpdatePPUSTATUSRegister(byte value) =>
             _registerPPUSTATUS = (byte) ((_registerPPUSTATUS & 0xE0) | (value & 0x1F));
     }
+
+    internal sealed record PpuCoreState(
+        byte FineX,
+        byte WriteOrderToggle,
+        byte FrameOrderToggle,
+        byte PpuCtrl,
+        byte PpuMask,
+        byte PpuStatus,
+        byte OamAddr,
+        int PpuAddr,
+        int PpuScroll,
+        byte PpuDataBuffer,
+        ulong TileShiftRegister,
+        byte NameTableByte,
+        byte AttributeTableByte,
+        byte TileDataLow,
+        byte TileDataHigh,
+        byte[] OamData,
+        byte[] Sprites,
+        int[] SpriteIndices,
+        int SpriteIndex,
+        int CountedSprites,
+        byte[] FrameBuffer,
+        int CurrentCycle,
+        int CurrentScanline,
+        int ScanLineState,
+        int CycleState,
+        long Cycles,
+        bool Nmi,
+        byte[] PatternTables,
+        byte[] Vram,
+        byte[] PaletteMemory);
 }

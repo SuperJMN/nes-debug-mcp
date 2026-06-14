@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Nes.Debug.Core\Nes.Debug.Core.csproj" />
+    <ProjectReference Include="..\Nes.Debug.Symbols\Nes.Debug.Symbols.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
