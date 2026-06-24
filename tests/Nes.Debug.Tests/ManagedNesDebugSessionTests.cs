@@ -77,6 +77,152 @@ public sealed class ManagedNesDebugSessionTests
     }
 
     [Fact]
+    public void Run_until_condition_stops_on_memory_predicate_and_reports_ppu_state()
+    {
+        using var temp = new TempRom(CreateMinimalNrom(
+        [
+            0xA9, 0x2A, // LDA #$2A
+            0x85, 0x02, // STA $02
+            0x4C, 0x04, 0x80, // JMP $8004
+        ]));
+        using var session = new ManagedNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var run = session.RunUntilCondition("[0x0002] == 0x2A", maxInstructions: 10, maxFrames: 1);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(run.IsSuccess, run.Error?.Message);
+        Assert.Equal("condition", run.Value.Reason);
+        Assert.Equal("0x8004", run.Value.Pc);
+        Assert.True(run.Value.InstructionsRun > 0);
+        Assert.NotNull(run.Value.PpuState);
+    }
+
+    [Fact]
+    public void Trace_until_write_range_reports_concrete_hit_address_and_last_writers()
+    {
+        using var temp = new TempRom(CreateMinimalNrom(
+        [
+            0xA9, 0x7B, // LDA #$7B
+            0x85, 0x02, // STA $02
+            0x4C, 0x04, 0x80, // JMP $8004
+        ]));
+        using var session = new ManagedNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var trace = session.TraceUntilWriteRange(0x0001, length: 4, maxInstructions: 10);
+        var writers = session.FindLastWriters(0x0001, 4);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(trace.IsSuccess, trace.Error?.Message);
+        Assert.True(writers.IsSuccess, writers.Error?.Message);
+        Assert.Equal("write", trace.Value.Reason);
+        Assert.Equal("0x0001", trace.Value.Address);
+        Assert.Equal("0x0002", trace.Value.HitAddress);
+        Assert.Equal("0x7B", trace.Value.Value);
+        Assert.NotEmpty(trace.Value.Disassembly.Instructions);
+        var writer = Assert.Single(writers.Value.Writers, item => item.Found);
+        Assert.Equal("0x0002", writer.Address);
+        Assert.Equal("0x7B", writer.Value);
+    }
+
+    [Fact]
+    public void Watchpoint_range_stops_continue_when_write_falls_inside_range()
+    {
+        using var temp = new TempRom(CreateMinimalNrom(
+        [
+            0xA9, 0x7B, // LDA #$7B
+            0x85, 0x02, // STA $02
+            0x4C, 0x04, 0x80, // JMP $8004
+        ]));
+        using var session = new ManagedNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var watchpoint = session.SetWatchpointRange(0x0001, length: 4, WatchpointMode.Write);
+        var run = session.ContinueUntilBreak(10);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(watchpoint.IsSuccess, watchpoint.Error?.Message);
+        Assert.True(run.IsSuccess, run.Error?.Message);
+        Assert.Equal(4, watchpoint.Value.Length);
+        Assert.Equal("watchpoint", run.Value.Reason);
+    }
+
+    [Fact]
+    public void Read_screen_region_returns_raw_small_region_and_summary_for_large_region()
+    {
+        using var temp = new TempRom(CreateMinimalNrom());
+        using var session = new ManagedNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var runFrame = session.RunFrame(1);
+        var small = session.ReadScreenRegion(0, 0, 2, 2, "palette_indices");
+        var large = session.ReadScreenRegion(0, 0, 256, 8, "palette_indices");
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(runFrame.IsSuccess, runFrame.Error?.Message);
+        Assert.True(small.IsSuccess, small.Error?.Message);
+        Assert.True(large.IsSuccess, large.Error?.Message);
+        Assert.Equal(4, small.Value.Values?.Count);
+        Assert.NotEmpty(small.Value.Histogram);
+        Assert.Null(large.Value.Values);
+        Assert.Equal(8, large.Value.RowHashes.Count);
+        Assert.Equal(2048, large.Value.PixelCount);
+    }
+
+    [Fact]
+    public void Input_timeline_runs_steps_collects_observations_and_releases_buttons()
+    {
+        using var temp = new TempRom(CreateMinimalNrom());
+        using var session = new ManagedNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var result = session.RunInputTimeline(
+        [
+            new InputTimelineStep { Frames = 1, Buttons = ["right"], ReadRegisters = true },
+            new InputTimelineStep { Frames = 1, Buttons = ["right", "a"], ReadPpuState = true, DumpOam = true },
+        ]);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        Assert.Equal(2, result.Value.FramesRun);
+        Assert.Empty(result.Value.Released.Pressed);
+        Assert.Equal(2, result.Value.Steps.Count);
+        Assert.Equal(["right"], result.Value.Steps[0].Buttons);
+        Assert.NotNull(result.Value.Steps[0].Registers);
+        Assert.NotNull(result.Value.Steps[1].PpuState);
+        Assert.NotNull(result.Value.Steps[1].Oam);
+    }
+
+    [Fact]
+    public void Timeline_counters_progress_with_frames_and_reset_with_rom()
+    {
+        using var temp = new TempRom(CreateMinimalNrom());
+        using var session = new ManagedNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var initial = session.GetState();
+        var run = session.RunFrame(1);
+        var step = session.StepInstruction(1);
+        var reset = session.Reset();
+        var resetState = session.GetState();
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(initial.IsSuccess, initial.Error?.Message);
+        Assert.Equal(0UL, initial.Value.Timeline.Frames);
+        Assert.Equal(0UL, initial.Value.Timeline.Cycles);
+        Assert.True(run.IsSuccess, run.Error?.Message);
+        Assert.Equal(1UL, run.Value.Timeline.Frames);
+        Assert.True(run.Value.Timeline.Cycles > 0);
+        Assert.True(step.IsSuccess, step.Error?.Message);
+        Assert.Equal(1, step.Value.InstructionsRun);
+        Assert.True(step.Value.Timeline.Instructions > run.Value.Timeline.Instructions);
+        Assert.True(reset.IsSuccess, reset.Error?.Message);
+        Assert.Equal(0UL, resetState.Value.Timeline.Frames);
+        Assert.Equal(0UL, resetState.Value.Timeline.Cycles);
+    }
+
+    [Fact]
     public void Step_over_runs_jsr_and_stops_at_return_address()
     {
         using var temp = new TempRom(CreateMinimalNrom(

@@ -24,6 +24,8 @@ public interface INesDebugSession
 
     DebugResult<ContinueResult> StepOut(int maxInstructions);
 
+    DebugResult<RunUntilConditionResult> RunUntilCondition(string condition, int maxInstructions, int maxFrames);
+
     DebugResult<BreakpointSetResult> SetBreakpoint(ushort address, string? condition);
 
     DebugResult<ClearBreakpointResult> ClearBreakpoint(string breakpointId);
@@ -31,6 +33,8 @@ public interface INesDebugSession
     DebugResult<ListBreakpointsResult> ListBreakpoints();
 
     DebugResult<WatchpointSetResult> SetWatchpoint(ushort address, WatchpointMode mode);
+
+    DebugResult<WatchpointSetResult> SetWatchpointRange(ushort address, int length, WatchpointMode mode);
 
     DebugResult<ClearWatchpointResult> ClearWatchpoint(string watchpointId);
 
@@ -60,7 +64,15 @@ public interface INesDebugSession
 
     DebugResult<LastWriterResult> FindLastWriter(ushort address);
 
+    DebugResult<LastWritersResult> FindLastWriters(ushort address, int length);
+
     DebugResult<TraceUntilWriteResult> TraceUntilWrite(ushort address, int maxInstructions);
+
+    DebugResult<TraceUntilWriteRangeResult> TraceUntilWriteRange(ushort address, int length, int maxInstructions);
+
+    DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format);
+
+    DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps);
 
     DebugResult<TilemapDumpResult> DumpTilemap(ushort address);
 

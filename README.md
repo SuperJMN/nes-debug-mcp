@@ -2,7 +2,7 @@
 
 `Nes.Mcp` is a cross-platform .NET MCP server for inspecting and controlling NES ROMs in iNES format.
 
-The first backend is a pure managed, vendored copy of the MIT-licensed [ADNES](https://github.com/enusbaum/ADNES) emulator core, wrapped with a synchronous debug session. The MCP server exposes CPU stepping, frame execution, controller input, breakpoints/watchpoints, CPU memory reads/writes, PPU/OAM inspection, symbols, lightweight disassembly, savestates, write tracing, and inline PNG screen capture.
+The first backend is a pure managed, vendored copy of the MIT-licensed [ADNES](https://github.com/enusbaum/ADNES) emulator core, wrapped with a synchronous debug session. The MCP server exposes CPU stepping, frame execution, deterministic controller input timelines, breakpoints/watchpoints, CPU memory reads/writes, PPU/OAM inspection, symbols, lightweight disassembly, savestates, write tracing, screen-region probes, and PNG screen capture.
 
 ## Build
 
@@ -74,11 +74,14 @@ Implemented tools:
 - `set_controller`
 - `set_joypad`
 - `press_buttons`
+- `run_input_timeline`
 - `continue_until_break`
+- `run_until_condition`
 - `set_breakpoint`
 - `clear_breakpoint`
 - `list_breakpoints`
 - `set_watchpoint`
+- `set_watchpoint_range`
 - `clear_watchpoint`
 - `list_watchpoints`
 - `get_state`
@@ -93,7 +96,10 @@ Implemented tools:
 - `read_ppu_state`
 - `capture_screen`
 - `find_last_writer`
+- `find_last_writers`
 - `trace_until_write`
+- `trace_until_write_range`
+- `read_screen_region`
 - `dump_tilemap`
 - `dump_tileset`
 

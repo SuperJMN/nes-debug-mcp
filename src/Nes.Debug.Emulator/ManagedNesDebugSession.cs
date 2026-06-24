@@ -15,7 +15,9 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
     private const int ScreenWidth = ADNES.Emulator.Width;
     private const int ScreenHeight = ADNES.Emulator.Height;
     private const int MaxInstructionsPerFrame = 1_000_000;
-    private const uint StateMagic = 0x31534D4E; // "NMS1"
+    private const int MaxRawScreenRegionPixels = 1024;
+    private const uint StateMagicV1 = 0x31534D4E; // "NMS1"
+    private const uint StateMagicV2 = 0x32534D4E; // "NMS2"
 
     private static readonly IReadOnlyDictionary<NesButton, Buttons> ButtonMap =
         new Dictionary<NesButton, Buttons>
@@ -28,6 +30,19 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
             [NesButton.Down] = Buttons.Down,
             [NesButton.Left] = Buttons.Left,
             [NesButton.Right] = Buttons.Right,
+        };
+
+    private static readonly IReadOnlyDictionary<string, NesButton> ButtonNames =
+        new Dictionary<string, NesButton>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["a"] = NesButton.A,
+            ["b"] = NesButton.B,
+            ["select"] = NesButton.Select,
+            ["start"] = NesButton.Start,
+            ["up"] = NesButton.Up,
+            ["down"] = NesButton.Down,
+            ["left"] = NesButton.Left,
+            ["right"] = NesButton.Right,
         };
 
     private static readonly NesButton[] CanonicalButtons =
@@ -60,9 +75,13 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
     private bool disposed;
     private int cpuIdleCycles;
     private long totalFrames;
+    private ulong totalCycles;
+    private ulong totalInstructions;
     private byte[] lastFrame = new byte[ScreenWidth * ScreenHeight];
     private int traceAddress = -1;
+    private int traceLength;
     private bool traceHit;
+    private ushort traceHitAddress;
     private ushort traceHitPc;
     private byte traceHitValue;
 
@@ -122,7 +141,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         {
             using var stream = new FileStream(path, FileMode.Create, FileAccess.Write);
             using var writer = new BinaryWriter(stream);
-            writer.Write(StateMagic);
+            writer.Write(StateMagicV2);
             writer.Write(Cpu.A);
             writer.Write(Cpu.X);
             writer.Write(Cpu.Y);
@@ -133,6 +152,8 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
             writer.Write(Cpu.NMI);
             writer.Write(cpuIdleCycles);
             writer.Write(totalFrames);
+            writer.Write(totalCycles);
+            writer.Write(totalInstructions);
             var ppuState = Ppu.SnapshotState();
             WriteBytes(writer, Cpu.CPUMemory.SnapshotInternalRam());
             WriteBytes(writer, ppuState.PatternTables);
@@ -165,7 +186,8 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read);
             using var reader = new BinaryReader(stream);
-            if (reader.ReadUInt32() != StateMagic)
+            var magic = reader.ReadUInt32();
+            if (magic is not (StateMagicV1 or StateMagicV2))
             {
                 return DebugResult<LoadStateResult>.Failure("invalid_state", "The file is not a managed NES save state.");
             }
@@ -180,6 +202,8 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
             var nmi = reader.ReadBoolean();
             var idleCycles = reader.ReadInt32();
             var frames = reader.ReadInt64();
+            var cyclesTotal = magic == StateMagicV2 ? reader.ReadUInt64() : 0;
+            var instructionsTotal = magic == StateMagicV2 ? reader.ReadUInt64() : 0;
             var cpuRam = ReadBytes(reader);
             var patternTables = ReadBytes(reader);
             var vram = ReadBytes(reader);
@@ -202,6 +226,8 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
                 Ppu.RestoreState(ppuState);
                 cpuIdleCycles = idleCycles;
                 totalFrames = frames;
+                totalCycles = cyclesTotal;
+                totalInstructions = instructionsTotal;
                 lastFrame = frame;
             }
             finally
@@ -269,7 +295,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
             : "";
 
         return DebugResult<StepInstructionResult>.Success(
-            new StepInstructionResult(Hex.FormatWord(pcBefore), registers.Value.Pc, registers.Value, disassembly));
+            new StepInstructionResult(Hex.FormatWord(pcBefore), registers.Value.Pc, registers.Value, disassembly, count, GetTimeline()));
     }
 
     public DebugResult<RunFrameResult> RunFrame(int count)
@@ -296,7 +322,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
                     {
                         var watchRegisters = ReadRegisters();
                         return watchRegisters.IsSuccess
-                            ? DebugResult<RunFrameResult>.Success(new RunFrameResult(framesRun, totalFrames, watchRegisters.Value, false))
+                            ? DebugResult<RunFrameResult>.Success(new RunFrameResult(framesRun, totalFrames, watchRegisters.Value, false, GetTimeline()))
                             : DebugResult<RunFrameResult>.Failure(watchRegisters.Error!.Code, watchRegisters.Error.Message);
                     }
 
@@ -320,7 +346,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
                     if (hit.Value)
                     {
                         return DebugResult<RunFrameResult>.Success(
-                            new RunFrameResult(framesRun, totalFrames, breakRegisters.Value, true));
+                            new RunFrameResult(framesRun, totalFrames, breakRegisters.Value, true, GetTimeline()));
                     }
                 }
 
@@ -354,7 +380,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         }
 
         return DebugResult<RunFrameResult>.Success(
-            new RunFrameResult(framesRun, totalFrames, registers.Value, finalHit.Value));
+            new RunFrameResult(framesRun, totalFrames, registers.Value, finalHit.Value, GetTimeline()));
     }
 
     public DebugResult<ControllerStateResult> SetController(IReadOnlyList<NesButton> buttons)
@@ -437,18 +463,18 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
 
                     if (hit.Value)
                     {
-                        return Stop("breakpoint", registers.Value);
+                        return Stop("breakpoint", registers.Value, (ulong)i);
                     }
                 }
 
                 StepMachineInstruction();
                 if (watchHit.HasValue)
                 {
-                    return ContinueStopped("watchpoint");
+                    return ContinueStopped("watchpoint", (ulong)i + 1);
                 }
             }
 
-            return ContinueStopped("maxInstructions");
+            return ContinueStopped("maxInstructions", (ulong)maxInstructions);
         }
         catch (Exception ex)
         {
@@ -493,6 +519,103 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         return StepUntil(maxInstructions, registers => ParseByte(registers.Sp) > startSp, "step_out");
     }
 
+    public DebugResult<RunUntilConditionResult> RunUntilCondition(string condition, int maxInstructions, int maxFrames)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<RunUntilConditionResult>();
+        }
+
+        if (!BreakpointCondition.TryParse(condition, out var parsedCondition, out var conditionError) || parsedCondition is null)
+        {
+            return DebugResult<RunUntilConditionResult>.Failure("invalid_condition", $"Invalid condition: {conditionError ?? "Condition is required."}");
+        }
+
+        watchHit = null;
+        var startFrames = totalFrames;
+        AttachReadObserverIfNeeded();
+        try
+        {
+            for (var i = 0; i < maxInstructions; i++)
+            {
+                var before = ReadRegisters();
+                if (!before.IsSuccess)
+                {
+                    return DebugResult<RunUntilConditionResult>.Failure(before.Error!.Code, before.Error.Message);
+                }
+
+                var conditionResult = parsedCondition.Evaluate(new ConditionContext(this, before.Value));
+                if (!conditionResult.IsSuccess)
+                {
+                    return DebugResult<RunUntilConditionResult>.Failure(conditionResult.Error!.Code, conditionResult.Error.Message);
+                }
+
+                if (conditionResult.Value)
+                {
+                    return StopRunUntilCondition("condition", before.Value, (uint)i, startFrames);
+                }
+
+                var hit = IsBreakpointHit(ParseWord(before.Value.Pc), before.Value);
+                if (!hit.IsSuccess)
+                {
+                    return DebugResult<RunUntilConditionResult>.Failure(hit.Error!.Code, hit.Error.Message);
+                }
+
+                if (hit.Value)
+                {
+                    return StopRunUntilCondition("breakpoint", before.Value, (uint)i, startFrames);
+                }
+
+                if (totalFrames - startFrames >= maxFrames)
+                {
+                    return StopRunUntilCondition("maxFrames", before.Value, (uint)i, startFrames);
+                }
+
+                StepMachineInstruction();
+
+                var after = ReadRegisters();
+                if (!after.IsSuccess)
+                {
+                    return DebugResult<RunUntilConditionResult>.Failure(after.Error!.Code, after.Error.Message);
+                }
+
+                conditionResult = parsedCondition.Evaluate(new ConditionContext(this, after.Value));
+                if (!conditionResult.IsSuccess)
+                {
+                    return DebugResult<RunUntilConditionResult>.Failure(conditionResult.Error!.Code, conditionResult.Error.Message);
+                }
+
+                if (conditionResult.Value)
+                {
+                    return StopRunUntilCondition("condition", after.Value, (uint)i + 1, startFrames);
+                }
+
+                if (watchHit.HasValue)
+                {
+                    return StopRunUntilCondition("watchpoint", after.Value, (uint)i + 1, startFrames);
+                }
+
+                if (totalFrames - startFrames >= maxFrames)
+                {
+                    return StopRunUntilCondition("maxFrames", after.Value, (uint)i + 1, startFrames);
+                }
+            }
+
+            var final = ReadRegisters();
+            return final.IsSuccess
+                ? StopRunUntilCondition("maxInstructions", final.Value, (uint)maxInstructions, startFrames)
+                : DebugResult<RunUntilConditionResult>.Failure(final.Error!.Code, final.Error.Message);
+        }
+        catch (Exception ex)
+        {
+            return DebugResult<RunUntilConditionResult>.Failure("run_until_condition_failed", ex.Message);
+        }
+        finally
+        {
+            DetachReadObserver();
+        }
+    }
+
     public DebugResult<BreakpointSetResult> SetBreakpoint(ushort address, string? condition)
     {
         if (!BreakpointCondition.TryParse(condition, out var parsedCondition, out var conditionError))
@@ -525,8 +648,18 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
     public DebugResult<WatchpointSetResult> SetWatchpoint(ushort address, WatchpointMode mode)
     {
         var watchpoint = watchpoints.Set(address, mode);
-        return DebugResult<WatchpointSetResult>.Success(
-            new WatchpointSetResult(watchpoint.Id, watchpoint.Address, ToWatchpointModeName(watchpoint.Mode), watchpoint.Enabled));
+        return ToWatchpointSetResult(watchpoint);
+    }
+
+    public DebugResult<WatchpointSetResult> SetWatchpointRange(ushort address, int length, WatchpointMode mode)
+    {
+        if (length < 1 || address + length > 0x10000)
+        {
+            return DebugResult<WatchpointSetResult>.Failure("invalid_range", "Watchpoint range must fit within 0x0000..0xFFFF.");
+        }
+
+        var watchpoint = watchpoints.Set(address, length, mode);
+        return ToWatchpointSetResult(watchpoint);
     }
 
     public DebugResult<ClearWatchpointResult> ClearWatchpoint(string watchpointId)
@@ -539,7 +672,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
     public DebugResult<ListWatchpointsResult> ListWatchpoints()
     {
         var entries = watchpoints.All
-            .Select(watchpoint => new WatchpointEntry(watchpoint.Id, watchpoint.Address, ToWatchpointModeName(watchpoint.Mode), watchpoint.Enabled))
+            .Select(watchpoint => new WatchpointEntry(watchpoint.Id, watchpoint.Address, ToWatchpointModeName(watchpoint.Mode), watchpoint.Enabled, watchpoint.Length))
             .ToArray();
 
         return DebugResult<ListWatchpointsResult>.Success(new ListWatchpointsResult(entries));
@@ -553,7 +686,8 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
                 romTitle,
                 mapper,
                 romLoaded ? Hex.FormatWord((ushort)Cpu.PC) : null,
-                totalFrames));
+                totalFrames,
+                GetTimeline()));
     }
 
     public DebugResult<NesCpuRegisters> ReadRegisters()
@@ -751,6 +885,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         }
 
         traceAddress = address;
+        traceLength = 1;
         traceHit = false;
         uint instructionsRun = 0;
         try
@@ -764,6 +899,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         finally
         {
             traceAddress = -1;
+            traceLength = 0;
         }
 
         var registers = ReadRegisters();
@@ -773,8 +909,275 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         }
 
         return DebugResult<TraceUntilWriteResult>.Success(traceHit
-            ? new TraceUntilWriteResult(true, "write", Hex.FormatWord(address), Hex.FormatWord(traceHitPc), Hex.FormatByte(traceHitValue), instructionsRun, registers.Value)
-            : new TraceUntilWriteResult(true, "maxInstructions", Hex.FormatWord(address), null, null, instructionsRun, registers.Value));
+            ? new TraceUntilWriteResult(true, "write", Hex.FormatWord(address), Hex.FormatWord(traceHitPc), Hex.FormatByte(traceHitValue), instructionsRun, registers.Value, GetTimeline())
+            : new TraceUntilWriteResult(true, "maxInstructions", Hex.FormatWord(address), null, null, instructionsRun, registers.Value, GetTimeline()));
+    }
+
+    public DebugResult<LastWritersResult> FindLastWriters(ushort address, int length)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<LastWritersResult>();
+        }
+
+        if (length < 1 || address + length > 0x10000)
+        {
+            return DebugResult<LastWritersResult>.Failure("invalid_range", "Writer range must fit within 0x0000..0xFFFF.");
+        }
+
+        var writers = Enumerable.Range(0, length)
+            .Select(offset =>
+            {
+                var current = (ushort)(address + offset);
+                return lastWriters.TryGetValue(current, out var record)
+                    ? new LastWriterResult(true, Hex.FormatWord(current), Hex.FormatWord(record.Pc), Hex.FormatByte(record.Value), record.Count)
+                    : new LastWriterResult(false, Hex.FormatWord(current), null, null, 0);
+            })
+            .ToArray();
+
+        return DebugResult<LastWritersResult>.Success(new LastWritersResult(writers));
+    }
+
+    public DebugResult<TraceUntilWriteRangeResult> TraceUntilWriteRange(ushort address, int length, int maxInstructions)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<TraceUntilWriteRangeResult>();
+        }
+
+        if (length < 1 || address + length > 0x10000)
+        {
+            return DebugResult<TraceUntilWriteRangeResult>.Failure("invalid_range", "Trace range must fit within 0x0000..0xFFFF.");
+        }
+
+        traceAddress = address;
+        traceLength = length;
+        traceHit = false;
+        uint instructionsRun = 0;
+        try
+        {
+            for (var i = 0; i < maxInstructions && !traceHit; i++)
+            {
+                StepMachineInstruction();
+                instructionsRun++;
+            }
+        }
+        finally
+        {
+            traceAddress = -1;
+            traceLength = 0;
+        }
+
+        var registers = ReadRegisters();
+        if (!registers.IsSuccess)
+        {
+            return DebugResult<TraceUntilWriteRangeResult>.Failure(registers.Error!.Code, registers.Error.Message);
+        }
+
+        var ppu = ReadPpuState();
+        if (!ppu.IsSuccess)
+        {
+            return DebugResult<TraceUntilWriteRangeResult>.Failure(ppu.Error!.Code, ppu.Error.Message);
+        }
+
+        var disassemblyAddress = traceHit ? traceHitPc : ParseWord(registers.Value.Pc);
+        var disassembly = Disassemble(disassemblyAddress, 4);
+        if (!disassembly.IsSuccess)
+        {
+            return DebugResult<TraceUntilWriteRangeResult>.Failure(disassembly.Error!.Code, disassembly.Error.Message);
+        }
+
+        return DebugResult<TraceUntilWriteRangeResult>.Success(new TraceUntilWriteRangeResult(
+            true,
+            traceHit ? "write" : "maxInstructions",
+            Hex.FormatWord(address),
+            length,
+            traceHit ? Hex.FormatWord(traceHitAddress) : null,
+            traceHit ? Hex.FormatWord(traceHitPc) : null,
+            traceHit ? Hex.FormatByte(traceHitValue) : null,
+            instructionsRun,
+            registers.Value,
+            ppu.Value,
+            disassembly.Value,
+            GetTimeline()));
+    }
+
+    public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<ScreenRegionResult>();
+        }
+
+        if (x < 0 || y < 0 || width < 1 || height < 1 || x + width > ScreenWidth || y + height > ScreenHeight)
+        {
+            return DebugResult<ScreenRegionResult>.Failure("invalid_screen_region", "Screen region must fit within 256x240.");
+        }
+
+        if (!format.Equals("palette_indices", StringComparison.OrdinalIgnoreCase))
+        {
+            return DebugResult<ScreenRegionResult>.Failure("invalid_screen_region_format", "format must be palette_indices.");
+        }
+
+        return DebugResult<ScreenRegionResult>.Success(BuildPaletteIndexRegion(x, y, width, height));
+    }
+
+    public DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<InputTimelineResult>();
+        }
+
+        var results = new List<InputTimelineStepResult>(steps.Count);
+        var totalFramesRun = 0;
+        var completed = false;
+        try
+        {
+            for (var index = 0; index < steps.Count; index++)
+            {
+                var step = steps[index];
+                var buttons = ParseButtonNames(step.Buttons);
+                if (!buttons.IsSuccess)
+                {
+                    return DebugResult<InputTimelineResult>.Failure(buttons.Error!.Code, buttons.Error.Message);
+                }
+
+                var controllerState = SetController(buttons.Value);
+                if (!controllerState.IsSuccess)
+                {
+                    return DebugResult<InputTimelineResult>.Failure(controllerState.Error!.Code, controllerState.Error.Message);
+                }
+
+                var run = RunFrame(step.Frames);
+                if (!run.IsSuccess)
+                {
+                    return DebugResult<InputTimelineResult>.Failure(run.Error!.Code, run.Error.Message);
+                }
+
+                totalFramesRun += run.Value.FramesRun;
+
+                NesCpuRegisters? registers = null;
+                if (step.ReadRegisters)
+                {
+                    var readRegisters = ReadRegisters();
+                    if (!readRegisters.IsSuccess)
+                    {
+                        return DebugResult<InputTimelineResult>.Failure(readRegisters.Error!.Code, readRegisters.Error.Message);
+                    }
+
+                    registers = readRegisters.Value;
+                }
+
+                PpuStateResult? ppuState = null;
+                if (step.ReadPpuState)
+                {
+                    var readPpu = ReadPpuState();
+                    if (!readPpu.IsSuccess)
+                    {
+                        return DebugResult<InputTimelineResult>.Failure(readPpu.Error!.Code, readPpu.Error.Message);
+                    }
+
+                    ppuState = readPpu.Value;
+                }
+
+                OamDumpResult? oam = null;
+                if (step.DumpOam)
+                {
+                    var readOam = ReadOam();
+                    if (!readOam.IsSuccess)
+                    {
+                        return DebugResult<InputTimelineResult>.Failure(readOam.Error!.Code, readOam.Error.Message);
+                    }
+
+                    oam = readOam.Value;
+                }
+
+                ScreenCaptureResult? capture = null;
+                if (step.Capture)
+                {
+                    var screen = CaptureScreen();
+                    if (!screen.IsSuccess)
+                    {
+                        return DebugResult<InputTimelineResult>.Failure(screen.Error!.Code, screen.Error.Message);
+                    }
+
+                    capture = screen.Value;
+                }
+
+                TilemapDumpResult? tilemap = null;
+                if (step.DumpTilemap)
+                {
+                    var address = (ushort)0x2000;
+                    if (!string.IsNullOrWhiteSpace(step.TilemapAddress))
+                    {
+                        var parsed = NesAddress.Parse(step.TilemapAddress);
+                        if (!parsed.IsSuccess)
+                        {
+                            return DebugResult<InputTimelineResult>.Failure(parsed.Error!.Code, parsed.Error.Message);
+                        }
+
+                        address = parsed.Value.Address;
+                    }
+
+                    var dump = DumpTilemap(address);
+                    if (!dump.IsSuccess)
+                    {
+                        return DebugResult<InputTimelineResult>.Failure(dump.Error!.Code, dump.Error.Message);
+                    }
+
+                    tilemap = dump.Value;
+                }
+
+                MemoryReadResult? memory = null;
+                if (!string.IsNullOrWhiteSpace(step.MemoryAddress))
+                {
+                    var parsed = NesAddress.Parse(step.MemoryAddress);
+                    if (!parsed.IsSuccess)
+                    {
+                        return DebugResult<InputTimelineResult>.Failure(parsed.Error!.Code, parsed.Error.Message);
+                    }
+
+                    var readMemory = ReadMemory(parsed.Value.Address, step.MemoryLength ?? 1);
+                    if (!readMemory.IsSuccess)
+                    {
+                        return DebugResult<InputTimelineResult>.Failure(readMemory.Error!.Code, readMemory.Error.Message);
+                    }
+
+                    memory = readMemory.Value;
+                }
+
+                results.Add(new InputTimelineStepResult(
+                    index,
+                    run.Value.FramesRun,
+                    GetTimeline().Frames,
+                    buttons.Value.Select(ButtonName).ToArray(),
+                    registers,
+                    ppuState,
+                    oam,
+                    capture,
+                    tilemap,
+                    memory,
+                    GetTimeline()));
+            }
+
+            completed = true;
+        }
+        finally
+        {
+            if (!completed)
+            {
+                _ = SetController([]);
+            }
+        }
+
+        var released = SetController([]);
+        if (!released.IsSuccess)
+        {
+            return DebugResult<InputTimelineResult>.Failure(released.Error!.Code, released.Error.Message);
+        }
+
+        return DebugResult<InputTimelineResult>.Success(new InputTimelineResult(totalFramesRun, released.Value, results, GetTimeline()));
     }
 
     public DebugResult<TilemapDumpResult> DumpTilemap(ushort address)
@@ -825,6 +1228,8 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         cpu.Cycles = 4;
         cpuIdleCycles = 0;
         totalFrames = 0;
+        totalCycles = 0;
+        totalInstructions = 0;
         lastFrame = new byte[ScreenWidth * ScreenHeight];
         pressedButtons.Clear();
         lastWriters.Clear();
@@ -832,13 +1237,21 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         trackReads = false;
         watchHit = null;
         traceAddress = -1;
+        traceLength = 0;
         traceHit = false;
         romLoaded = true;
     }
 
     private int StepMachineInstruction()
     {
+        var wasIdle = cpuIdleCycles > 0;
         var ticks = StepCpu();
+        totalCycles += (ulong)Math.Max(0, ticks);
+        if (!wasIdle)
+        {
+            totalInstructions++;
+        }
+
         for (var i = 0; i < ticks * 3; i++)
         {
             Ppu.Tick();
@@ -897,9 +1310,10 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
             ? new WriteRecord(pc, value, existing.Count + 1)
             : new WriteRecord(pc, value, 1);
 
-        if (masked == traceAddress)
+        if (traceAddress >= 0 && masked >= traceAddress && masked < traceAddress + traceLength)
         {
             traceHit = true;
+            traceHitAddress = (ushort)masked;
             traceHitPc = pc;
             traceHitValue = value;
         }
@@ -924,11 +1338,11 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         }
     }
 
-    private DebugResult<ContinueResult> ContinueStopped(string reason)
+    private DebugResult<ContinueResult> ContinueStopped(string reason, ulong instructionsRun)
     {
         var registers = ReadRegisters();
         return registers.IsSuccess
-            ? DebugResult<ContinueResult>.Success(new ContinueResult(true, reason, registers.Value.Pc, registers.Value))
+            ? Stop(reason, registers.Value, instructionsRun)
             : DebugResult<ContinueResult>.Failure(registers.Error!.Code, registers.Error.Message);
     }
 
@@ -947,7 +1361,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
 
             if (watchHit.HasValue)
             {
-                return Stop("watchpoint", registers.Value);
+                return Stop("watchpoint", registers.Value, 1);
             }
 
             var breakpoint = IsBreakpointHit(ParseWord(registers.Value.Pc), registers.Value);
@@ -956,7 +1370,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
                 return DebugResult<ContinueResult>.Failure(breakpoint.Error!.Code, breakpoint.Error.Message);
             }
 
-            return breakpoint.Value ? Stop("breakpoint", registers.Value) : Stop(reason, registers.Value);
+            return breakpoint.Value ? Stop("breakpoint", registers.Value, 1) : Stop(reason, registers.Value, 1);
         }
         finally
         {
@@ -981,7 +1395,7 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
 
                 if (watchHit.HasValue)
                 {
-                    return Stop("watchpoint", registers.Value);
+                    return Stop("watchpoint", registers.Value, (ulong)i + 1);
                 }
 
                 var breakpoint = IsBreakpointHit(ParseWord(registers.Value.Pc), registers.Value);
@@ -992,18 +1406,18 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
 
                 if (breakpoint.Value)
                 {
-                    return Stop("breakpoint", registers.Value);
+                    return Stop("breakpoint", registers.Value, (ulong)i + 1);
                 }
 
                 if (completed(registers.Value))
                 {
-                    return Stop(completedReason, registers.Value);
+                    return Stop(completedReason, registers.Value, (ulong)i + 1);
                 }
             }
 
             var final = ReadRegisters();
             return final.IsSuccess
-                ? Stop("maxInstructions", final.Value)
+                ? Stop("maxInstructions", final.Value, (ulong)maxInstructions)
                 : DebugResult<ContinueResult>.Failure(final.Error!.Code, final.Error.Message);
         }
         finally
@@ -1062,6 +1476,26 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         trackReads = false;
     }
 
+    private DebugResult<RunUntilConditionResult> StopRunUntilCondition(
+        string reason,
+        NesCpuRegisters registers,
+        uint instructionsRun,
+        long startFrames)
+    {
+        var ppu = ReadPpuState();
+        return ppu.IsSuccess
+            ? DebugResult<RunUntilConditionResult>.Success(new RunUntilConditionResult(
+                true,
+                reason,
+                registers.Pc,
+                instructionsRun,
+                (ulong)Math.Max(0, totalFrames - startFrames),
+                registers,
+                ppu.Value,
+                GetTimeline()))
+            : DebugResult<RunUntilConditionResult>.Failure(ppu.Error!.Code, ppu.Error.Message);
+    }
+
     private byte ReadByte(ushort address) => Cpu.CPUMemory.ReadByte(address);
 
     private byte[] ReadBytes(ushort address, int length)
@@ -1086,8 +1520,86 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IDisposable
         return bytes;
     }
 
-    private static DebugResult<ContinueResult> Stop(string reason, NesCpuRegisters registers) =>
-        DebugResult<ContinueResult>.Success(new ContinueResult(true, reason, registers.Pc, registers));
+    private ScreenRegionResult BuildPaletteIndexRegion(int x, int y, int width, int height)
+    {
+        var includeRaw = width * height <= MaxRawScreenRegionPixels;
+        var values = new List<int>(Math.Min(width * height, MaxRawScreenRegionPixels));
+        var histogram = new Dictionary<string, int>(StringComparer.Ordinal);
+        var rowHashes = new List<string>(height);
+
+        for (var row = 0; row < height; row++)
+        {
+            var hash = 2166136261u;
+            for (var column = 0; column < width; column++)
+            {
+                var paletteIndex = lastFrame[(y + row) * ScreenWidth + x + column] & 0x3F;
+                if (includeRaw)
+                {
+                    values.Add(paletteIndex);
+                }
+
+                var key = paletteIndex.ToString();
+                histogram[key] = histogram.TryGetValue(key, out var count) ? count + 1 : 1;
+                hash ^= (byte)paletteIndex;
+                hash *= 16777619u;
+            }
+
+            rowHashes.Add($"0x{hash:X8}");
+        }
+
+        return new ScreenRegionResult(
+            x,
+            y,
+            width,
+            height,
+            "palette_indices",
+            width * height,
+            includeRaw ? values : null,
+            histogram,
+            rowHashes);
+    }
+
+    private static DebugResult<IReadOnlyList<NesButton>> ParseButtonNames(IReadOnlyList<string>? buttons)
+    {
+        if (buttons is null)
+        {
+            return DebugResult<IReadOnlyList<NesButton>>.Failure(
+                "invalid_buttons",
+                "buttons is required. Use an empty array to release every button.");
+        }
+
+        var selected = new HashSet<NesButton>();
+        foreach (var rawButton in buttons)
+        {
+            var button = rawButton?.Trim();
+            if (string.IsNullOrEmpty(button))
+            {
+                return DebugResult<IReadOnlyList<NesButton>>.Failure("invalid_button", "Button names must not be empty.");
+            }
+
+            if (!ButtonNames.TryGetValue(button, out var parsed))
+            {
+                return DebugResult<IReadOnlyList<NesButton>>.Failure(
+                    "invalid_button",
+                    $"Unknown button '{button}'. Valid buttons: {string.Join(", ", ButtonNames.Keys)}.");
+            }
+
+            selected.Add(parsed);
+        }
+
+        return DebugResult<IReadOnlyList<NesButton>>.Success(CanonicalButtons.Where(selected.Contains).ToArray());
+    }
+
+    private static DebugResult<WatchpointSetResult> ToWatchpointSetResult(WatchpointInfo watchpoint)
+    {
+        return DebugResult<WatchpointSetResult>.Success(
+            new WatchpointSetResult(watchpoint.Id, watchpoint.Address, ToWatchpointModeName(watchpoint.Mode), watchpoint.Enabled, watchpoint.Length));
+    }
+
+    private DebugResult<ContinueResult> Stop(string reason, NesCpuRegisters registers, ulong instructionsRun = 0) =>
+        DebugResult<ContinueResult>.Success(new ContinueResult(true, reason, registers.Pc, registers, GetTimeline(), instructionsRun));
+
+    private TimelineCounters GetTimeline() => new((ulong)Math.Max(0, totalFrames), totalCycles, totalInstructions);
 
     private static string ToWatchpointModeName(WatchpointMode mode) => mode switch
     {

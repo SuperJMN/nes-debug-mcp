@@ -19,17 +19,37 @@ public sealed record LoadStateResult(
 
 public sealed record ResetResult([property: JsonPropertyName("reset")] bool Reset);
 
+public sealed record TimelineCounters(
+    [property: JsonPropertyName("frames")] ulong Frames,
+    [property: JsonPropertyName("cycles")] ulong Cycles,
+    [property: JsonPropertyName("instructions")] ulong Instructions = 0);
+
 public sealed record StepInstructionResult(
     [property: JsonPropertyName("pcBefore")] string PcBefore,
     [property: JsonPropertyName("pcAfter")] string PcAfter,
     [property: JsonPropertyName("registers")] NesCpuRegisters Registers,
-    [property: JsonPropertyName("disassembly")] string Disassembly);
+    [property: JsonPropertyName("disassembly")] string Disassembly,
+    [property: JsonPropertyName("instructionsRun")] int InstructionsRun,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline)
+{
+    public StepInstructionResult(string pcBefore, string pcAfter, NesCpuRegisters registers, string disassembly)
+        : this(pcBefore, pcAfter, registers, disassembly, 1, new TimelineCounters(0, 0))
+    {
+    }
+}
 
 public sealed record RunFrameResult(
     [property: JsonPropertyName("framesRun")] int FramesRun,
     [property: JsonPropertyName("totalFrames")] long TotalFrames,
     [property: JsonPropertyName("registers")] NesCpuRegisters Registers,
-    [property: JsonPropertyName("hitBreakpoint")] bool HitBreakpoint);
+    [property: JsonPropertyName("hitBreakpoint")] bool HitBreakpoint,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline)
+{
+    public RunFrameResult(int framesRun, long totalFrames, NesCpuRegisters registers, bool hitBreakpoint)
+        : this(framesRun, totalFrames, registers, hitBreakpoint, new TimelineCounters((ulong)Math.Max(0, totalFrames), 0))
+    {
+    }
+}
 
 public enum NesButton
 {
@@ -63,7 +83,15 @@ public sealed record ContinueResult(
     [property: JsonPropertyName("stopped")] bool Stopped,
     [property: JsonPropertyName("reason")] string Reason,
     [property: JsonPropertyName("pc")] string Pc,
-    [property: JsonPropertyName("registers")] NesCpuRegisters Registers);
+    [property: JsonPropertyName("registers")] NesCpuRegisters Registers,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline,
+    [property: JsonPropertyName("instructionsRun")] ulong InstructionsRun)
+{
+    public ContinueResult(bool stopped, string reason, string pc, NesCpuRegisters registers)
+        : this(stopped, reason, pc, registers, new TimelineCounters(0, 0), 0)
+    {
+    }
+}
 
 public sealed record BreakpointSetResult(
     [property: JsonPropertyName("breakpointId")] string BreakpointId,
@@ -92,7 +120,14 @@ public sealed record WatchpointSetResult(
     [property: JsonPropertyName("watchpointId")] string WatchpointId,
     [property: JsonPropertyName("address")] string Address,
     [property: JsonPropertyName("mode")] string Mode,
-    [property: JsonPropertyName("enabled")] bool Enabled);
+    [property: JsonPropertyName("enabled")] bool Enabled,
+    [property: JsonPropertyName("length")] int Length)
+{
+    public WatchpointSetResult(string watchpointId, string address, string mode, bool enabled)
+        : this(watchpointId, address, mode, enabled, 1)
+    {
+    }
+}
 
 public sealed record ClearWatchpointResult([property: JsonPropertyName("cleared")] bool Cleared);
 
@@ -103,14 +138,28 @@ public sealed record WatchpointEntry(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("address")] string Address,
     [property: JsonPropertyName("mode")] string Mode,
-    [property: JsonPropertyName("enabled")] bool Enabled);
+    [property: JsonPropertyName("enabled")] bool Enabled,
+    [property: JsonPropertyName("length")] int Length)
+{
+    public WatchpointEntry(string id, string address, string mode, bool enabled)
+        : this(id, address, mode, enabled, 1)
+    {
+    }
+}
 
 public sealed record SessionStateResult(
     [property: JsonPropertyName("romLoaded")] bool RomLoaded,
     [property: JsonPropertyName("title")] string? Title,
     [property: JsonPropertyName("mapper")] int? Mapper,
     [property: JsonPropertyName("pc")] string? Pc,
-    [property: JsonPropertyName("totalFrames")] long TotalFrames);
+    [property: JsonPropertyName("totalFrames")] long TotalFrames,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline)
+{
+    public SessionStateResult(bool romLoaded, string? title, int? mapper, string? pc, long totalFrames)
+        : this(romLoaded, title, mapper, pc, totalFrames, new TimelineCounters((ulong)Math.Max(0, totalFrames), 0))
+    {
+    }
+}
 
 public sealed record NesCpuRegisters(
     [property: JsonPropertyName("a")] string A,
@@ -187,7 +236,104 @@ public sealed record TraceUntilWriteResult(
     [property: JsonPropertyName("pc")] string? Pc,
     [property: JsonPropertyName("value")] string? Value,
     [property: JsonPropertyName("instructionsRun")] uint InstructionsRun,
-    [property: JsonPropertyName("registers")] NesCpuRegisters Registers);
+    [property: JsonPropertyName("registers")] NesCpuRegisters Registers,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline)
+{
+    public TraceUntilWriteResult(bool stopped, string reason, string address, string? pc, string? value, uint instructionsRun, NesCpuRegisters registers)
+        : this(stopped, reason, address, pc, value, instructionsRun, registers, new TimelineCounters(0, 0))
+    {
+    }
+}
+
+public sealed record LastWritersResult(
+    [property: JsonPropertyName("writers")] IReadOnlyList<LastWriterResult> Writers);
+
+public sealed record TraceUntilWriteRangeResult(
+    [property: JsonPropertyName("stopped")] bool Stopped,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("address")] string Address,
+    [property: JsonPropertyName("length")] int Length,
+    [property: JsonPropertyName("hitAddress")] string? HitAddress,
+    [property: JsonPropertyName("pc")] string? Pc,
+    [property: JsonPropertyName("value")] string? Value,
+    [property: JsonPropertyName("instructionsRun")] uint InstructionsRun,
+    [property: JsonPropertyName("registers")] NesCpuRegisters Registers,
+    [property: JsonPropertyName("ppuState")] PpuStateResult PpuState,
+    [property: JsonPropertyName("disassembly")] DisassembleResult Disassembly,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record RunUntilConditionResult(
+    [property: JsonPropertyName("stopped")] bool Stopped,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("pc")] string Pc,
+    [property: JsonPropertyName("instructionsRun")] uint InstructionsRun,
+    [property: JsonPropertyName("framesRun")] ulong FramesRun,
+    [property: JsonPropertyName("registers")] NesCpuRegisters Registers,
+    [property: JsonPropertyName("ppuState")] PpuStateResult PpuState,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed class InputTimelineStep
+{
+    [JsonPropertyName("frames")]
+    public int Frames { get; init; }
+
+    [JsonPropertyName("buttons")]
+    public IReadOnlyList<string> Buttons { get; init; } = [];
+
+    [JsonPropertyName("readRegisters")]
+    public bool ReadRegisters { get; init; }
+
+    [JsonPropertyName("readPpuState")]
+    public bool ReadPpuState { get; init; }
+
+    [JsonPropertyName("dumpOam")]
+    public bool DumpOam { get; init; }
+
+    [JsonPropertyName("capture")]
+    public bool Capture { get; init; }
+
+    [JsonPropertyName("dumpTilemap")]
+    public bool DumpTilemap { get; init; }
+
+    [JsonPropertyName("tilemapAddress")]
+    public string? TilemapAddress { get; init; }
+
+    [JsonPropertyName("memoryAddress")]
+    public string? MemoryAddress { get; init; }
+
+    [JsonPropertyName("memoryLength")]
+    public int? MemoryLength { get; init; }
+}
+
+public sealed record InputTimelineStepResult(
+    [property: JsonPropertyName("index")] int Index,
+    [property: JsonPropertyName("framesRun")] int FramesRun,
+    [property: JsonPropertyName("totalFrames")] ulong TotalFrames,
+    [property: JsonPropertyName("buttons")] IReadOnlyList<string> Buttons,
+    [property: JsonPropertyName("registers")] NesCpuRegisters? Registers,
+    [property: JsonPropertyName("ppuState")] PpuStateResult? PpuState,
+    [property: JsonPropertyName("oam")] OamDumpResult? Oam,
+    [property: JsonPropertyName("screenCapture")] ScreenCaptureResult? ScreenCapture,
+    [property: JsonPropertyName("tilemap")] TilemapDumpResult? Tilemap,
+    [property: JsonPropertyName("memory")] MemoryReadResult? Memory,
+    [property: JsonPropertyName("timeline")] TimelineCounters? Timeline);
+
+public sealed record InputTimelineResult(
+    [property: JsonPropertyName("framesRun")] int FramesRun,
+    [property: JsonPropertyName("released")] ControllerStateResult Released,
+    [property: JsonPropertyName("steps")] IReadOnlyList<InputTimelineStepResult> Steps,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record ScreenRegionResult(
+    [property: JsonPropertyName("x")] int X,
+    [property: JsonPropertyName("y")] int Y,
+    [property: JsonPropertyName("width")] int Width,
+    [property: JsonPropertyName("height")] int Height,
+    [property: JsonPropertyName("format")] string Format,
+    [property: JsonPropertyName("pixelCount")] int PixelCount,
+    [property: JsonPropertyName("values")] IReadOnlyList<int>? Values,
+    [property: JsonPropertyName("histogram")] IReadOnlyDictionary<string, int> Histogram,
+    [property: JsonPropertyName("rowHashes")] IReadOnlyList<string> RowHashes);
 
 public sealed record TilemapDumpResult(
     [property: JsonPropertyName("address")] string Address,
@@ -225,3 +371,18 @@ public sealed record ScreenCaptureResult(
     [property: JsonPropertyName("height")] int Height,
     [property: JsonPropertyName("mimeType")] string MimeType,
     [property: JsonPropertyName("data")] byte[] Data);
+
+public sealed record ScreenCaptureMetadata(
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline,
+    [property: JsonPropertyName("registers")] NesCpuRegisters? Registers,
+    [property: JsonPropertyName("ppuState")] PpuStateResult? PpuState,
+    [property: JsonPropertyName("romTitle")] string? RomTitle,
+    [property: JsonPropertyName("mapper")] int? Mapper);
+
+public sealed record ScreenCaptureArtifactResult(
+    [property: JsonPropertyName("width")] int Width,
+    [property: JsonPropertyName("height")] int Height,
+    [property: JsonPropertyName("mimeType")] string MimeType,
+    [property: JsonPropertyName("saved")] bool Saved,
+    [property: JsonPropertyName("path")] string Path,
+    [property: JsonPropertyName("metadata")] ScreenCaptureMetadata? Metadata);

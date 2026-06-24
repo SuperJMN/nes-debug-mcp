@@ -59,6 +59,11 @@ public sealed class SynchronizedNesDebugSession(INesDebugSession inner) : INesDe
         lock (gate) { return inner.StepOut(maxInstructions); }
     }
 
+    public DebugResult<RunUntilConditionResult> RunUntilCondition(string condition, int maxInstructions, int maxFrames)
+    {
+        lock (gate) { return inner.RunUntilCondition(condition, maxInstructions, maxFrames); }
+    }
+
     public DebugResult<BreakpointSetResult> SetBreakpoint(ushort address, string? condition)
     {
         lock (gate) { return inner.SetBreakpoint(address, condition); }
@@ -77,6 +82,11 @@ public sealed class SynchronizedNesDebugSession(INesDebugSession inner) : INesDe
     public DebugResult<WatchpointSetResult> SetWatchpoint(ushort address, WatchpointMode mode)
     {
         lock (gate) { return inner.SetWatchpoint(address, mode); }
+    }
+
+    public DebugResult<WatchpointSetResult> SetWatchpointRange(ushort address, int length, WatchpointMode mode)
+    {
+        lock (gate) { return inner.SetWatchpointRange(address, length, mode); }
     }
 
     public DebugResult<ClearWatchpointResult> ClearWatchpoint(string watchpointId)
@@ -149,9 +159,29 @@ public sealed class SynchronizedNesDebugSession(INesDebugSession inner) : INesDe
         lock (gate) { return inner.FindLastWriter(address); }
     }
 
+    public DebugResult<LastWritersResult> FindLastWriters(ushort address, int length)
+    {
+        lock (gate) { return inner.FindLastWriters(address, length); }
+    }
+
     public DebugResult<TraceUntilWriteResult> TraceUntilWrite(ushort address, int maxInstructions)
     {
         lock (gate) { return inner.TraceUntilWrite(address, maxInstructions); }
+    }
+
+    public DebugResult<TraceUntilWriteRangeResult> TraceUntilWriteRange(ushort address, int length, int maxInstructions)
+    {
+        lock (gate) { return inner.TraceUntilWriteRange(address, length, maxInstructions); }
+    }
+
+    public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format)
+    {
+        lock (gate) { return inner.ReadScreenRegion(x, y, width, height, format); }
+    }
+
+    public DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps)
+    {
+        lock (gate) { return inner.RunInputTimeline(steps); }
     }
 
     public DebugResult<TilemapDumpResult> DumpTilemap(ushort address)
