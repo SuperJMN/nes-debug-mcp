@@ -20,7 +20,7 @@ namespace ADNES.PPU
         internal Memory(IMapper memoryMapper)
         {
             _memoryMapper = memoryMapper;
-            _ppuVram = new byte[2048];
+            _ppuVram = new byte[_memoryMapper.NametableMirroring == NametableMirroring.FourScreen ? 0x1000 : 0x800];
             _paletteMemory = new byte[32];
         }
 
@@ -167,6 +167,8 @@ namespace ADNES.PPU
                     break;
                 case NametableMirroring.SingleUpper:
                     index = index % 400 + 0x400;
+                    break;
+                case NametableMirroring.FourScreen:
                     break;
                 default:
                     throw new ArgumentOutOfRangeException();

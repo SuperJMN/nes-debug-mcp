@@ -23,5 +23,9 @@
         ///     Single Screen mirroring of the upper nametable.
         /// </summary>
         SingleUpper,
+        /// <summary>
+        ///     Four-screen VRAM with all four nametables backed independently.
+        /// </summary>
+        FourScreen,
     }
 }
