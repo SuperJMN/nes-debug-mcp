@@ -171,6 +171,39 @@ public sealed class ManagedNesDebugSessionTests
     }
 
     [Fact]
+    public void Four_screen_rom_keeps_all_four_nametables_distinct()
+    {
+        using var temp = new TempRom(CreateMinimalNrom(
+            [
+                ..WritePpuByte(0x2000, 0x11),
+                ..WritePpuByte(0x2400, 0x22),
+                ..WritePpuByte(0x2800, 0x33),
+                ..WritePpuByte(0x2C00, 0x44),
+                0x4C, 0x3C, 0x80, // JMP $803C
+            ],
+            flags6: 0x08));
+        using var session = new ManagedNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var step = session.StepInstruction(25);
+        var nametable0 = session.DumpTilemap(0x2000);
+        var nametable1 = session.DumpTilemap(0x2400);
+        var nametable2 = session.DumpTilemap(0x2800);
+        var nametable3 = session.DumpTilemap(0x2C00);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(step.IsSuccess, step.Error?.Message);
+        Assert.True(nametable0.IsSuccess, nametable0.Error?.Message);
+        Assert.True(nametable1.IsSuccess, nametable1.Error?.Message);
+        Assert.True(nametable2.IsSuccess, nametable2.Error?.Message);
+        Assert.True(nametable3.IsSuccess, nametable3.Error?.Message);
+        Assert.Equal("11", FirstTile(nametable0.Value));
+        Assert.Equal("22", FirstTile(nametable1.Value));
+        Assert.Equal("33", FirstTile(nametable2.Value));
+        Assert.Equal("44", FirstTile(nametable3.Value));
+    }
+
+    [Fact]
     public void Input_timeline_runs_steps_collects_observations_and_releases_buttons()
     {
         using var temp = new TempRom(CreateMinimalNrom());
@@ -274,7 +307,7 @@ public sealed class ManagedNesDebugSessionTests
         Assert.Equal("0x8002", registers.Value.Pc);
     }
 
-    private static byte[] CreateMinimalNrom(byte[]? program = null)
+    private static byte[] CreateMinimalNrom(byte[]? program = null, byte flags6 = 0)
     {
         var rom = new byte[16 + 16 * 1024 + 8 * 1024];
         rom[0] = (byte)'N';
@@ -283,6 +316,7 @@ public sealed class ManagedNesDebugSessionTests
         rom[3] = 0x1A;
         rom[4] = 1;
         rom[5] = 1;
+        rom[6] = flags6;
 
         var prg = rom.AsSpan(16, 16 * 1024);
         (program ?? [0xA9, 0x42, 0xEA, 0x4C, 0x02, 0x80]).CopyTo(prg);
@@ -290,6 +324,19 @@ public sealed class ManagedNesDebugSessionTests
         prg[0x3FFD] = 0x80;
         return rom;
     }
+
+    private static byte[] WritePpuByte(ushort address, byte value) =>
+    [
+        0xA9, (byte)(address >> 8), // LDA #high
+        0x8D, 0x06, 0x20, // STA $2006
+        0xA9, (byte)(address & 0xFF), // LDA #low
+        0x8D, 0x06, 0x20, // STA $2006
+        0xA9, value, // LDA #value
+        0x8D, 0x07, 0x20, // STA $2007
+    ];
+
+    private static string FirstTile(TilemapDumpResult tilemap) =>
+        tilemap.Rows[0].Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
 
     private sealed class TempRom : IDisposable
     {

@@ -79,7 +79,11 @@ namespace ADNES.Cartridge
                 prgROMOffset += 512;
 
             //Set Initial Mirroring Mode
-            _nametableMirroring = Flags6.IsFlagSet(Byte6Flags.VerticalMirroring) ? NametableMirroring.Vertical : NametableMirroring.Horizontal;
+            _nametableMirroring = Flags6.IsFlagSet(Byte6Flags.FourScreenVRAM)
+                ? NametableMirroring.FourScreen
+                : Flags6.IsFlagSet(Byte6Flags.VerticalMirroring)
+                    ? NametableMirroring.Vertical
+                    : NametableMirroring.Horizontal;
 
             //Set Flags7
             Flags7 = ROM[7];
