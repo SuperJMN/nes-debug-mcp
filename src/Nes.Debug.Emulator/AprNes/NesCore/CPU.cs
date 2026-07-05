@@ -80,6 +80,7 @@ namespace AprNes
             byte val;
             if (addr < 0x2000) { val = NES_MEM[addr & 0x7FF]; cpubus = val; internalBus = val; }
             else { val = mem_read_page[addr >> 13](addr); if (addr != 0x4015) { cpubus = val; internalBus = val; } }
+            debugReadObserver?.Invoke(addr, debugCurrentInstructionPc);
             return val;
         }
 
@@ -105,6 +106,7 @@ namespace AprNes
             mem_write_page[addr >> 13](addr, val);
             cpubus = val;
             internalBus = val;
+            debugWriteObserver?.Invoke(addr, val, debugCurrentInstructionPc);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -112,6 +114,7 @@ namespace AprNes
         {
             cpuBusAddr = addr; cpuIsRead = true;
             byte val = NES_MEM[addr]; cpubus = val; internalBus = val;
+            debugReadObserver?.Invoke(addr, debugCurrentInstructionPc);
             return val;
         }
 
@@ -120,6 +123,7 @@ namespace AprNes
         {
             cpuBusAddr = addr; cpuIsRead = false;
             NES_MEM[addr] = val; cpubus = val; internalBus = val;
+            debugWriteObserver?.Invoke(addr, val, debugCurrentInstructionPc);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

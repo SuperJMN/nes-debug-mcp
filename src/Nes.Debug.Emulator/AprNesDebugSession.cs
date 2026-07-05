@@ -56,6 +56,7 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
     private readonly BreakpointCollection breakpoints = new();
     private readonly WatchpointCollection watchpoints = new();
     private readonly SymbolService symbols = new();
+    private readonly Dictionary<int, WriteRecord> lastWriters = [];
     private readonly HashSet<NesButton> pressedButtons = [];
     private byte[] romBytes = [];
     private string? romTitle;
@@ -63,8 +64,17 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
     private int prgRomBanks;
     private int chrRomBanks;
     private bool romLoaded;
+    private bool trackWrites;
+    private bool trackReads;
+    private WatchHit? watchHit;
     private bool disposed;
     private ulong totalInstructions;
+    private int traceAddress = -1;
+    private int traceLength;
+    private bool traceHit;
+    private ushort traceHitAddress;
+    private ushort traceHitPc;
+    private byte traceHitValue;
 
     public DebugResult<LoadRomResult> LoadRom(string path)
     {
@@ -103,6 +113,7 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
             pressedButtons.Clear();
             breakpoints.ClearAll();
             watchpoints.ClearAll();
+            InitializeDebugTracking();
 
             return DebugResult<LoadRomResult>.Success(new LoadRomResult(true, romTitle, mapper.Value, prgRomBanks, chrRomBanks));
         }
@@ -185,6 +196,7 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
 
             totalInstructions = 0;
             pressedButtons.Clear();
+            InitializeDebugTracking();
             return DebugResult<ResetResult>.Success(new ResetResult(true));
         }
         catch (Exception ex)
@@ -207,10 +219,8 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
         {
             for (var i = 0; i < count; i++)
             {
-                NesCore.DebugStepInstruction();
+                StepMachineInstruction();
             }
-
-            totalInstructions += (ulong)count;
         }
         catch (Exception ex)
         {
@@ -300,14 +310,167 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
             new PressButtonsResult(run.Value.FramesRun, released.Value, run.Value.Registers));
     }
 
-    public DebugResult<ContinueResult> ContinueUntilBreak(int maxInstructions) => Unsupported<ContinueResult>("continue_until_break");
+    public DebugResult<ContinueResult> ContinueUntilBreak(int maxInstructions)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<ContinueResult>();
+        }
 
-    public DebugResult<ContinueResult> StepOver(int maxInstructions) => Unsupported<ContinueResult>("step_over");
+        watchHit = null;
+        AttachReadObserverIfNeeded();
+        try
+        {
+            for (var i = 0; i < maxInstructions; i++)
+            {
+                var registers = ToRegisters(NesCore.DebugReadRegisters());
+                var pc = ParseWord(registers.Pc);
+                var hit = IsBreakpointHit(pc, registers);
+                if (!hit.IsSuccess)
+                {
+                    return DebugResult<ContinueResult>.Failure(hit.Error!.Code, hit.Error.Message);
+                }
 
-    public DebugResult<ContinueResult> StepOut(int maxInstructions) => Unsupported<ContinueResult>("step_out");
+                if (hit.Value)
+                {
+                    return Stop("breakpoint", registers, (ulong)i);
+                }
 
-    public DebugResult<RunUntilConditionResult> RunUntilCondition(string condition, int maxInstructions, int maxFrames) =>
-        Unsupported<RunUntilConditionResult>("run_until_condition");
+                StepMachineInstruction();
+                if (watchHit.HasValue)
+                {
+                    return ContinueStopped("watchpoint", (ulong)i + 1);
+                }
+            }
+
+            return ContinueStopped("maxInstructions", (ulong)maxInstructions);
+        }
+        catch (Exception ex)
+        {
+            return DebugResult<ContinueResult>.Failure("continue_failed", ex.Message);
+        }
+        finally
+        {
+            DetachReadObserver();
+        }
+    }
+
+    public DebugResult<ContinueResult> StepOver(int maxInstructions)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<ContinueResult>();
+        }
+
+        var start = NesCore.DebugReadRegisters();
+        var opcode = NesCore.DebugReadCpu(start.Pc);
+        if (opcode != 0x20)
+        {
+            return StepSingle("step");
+        }
+
+        var returnAddress = (ushort)(start.Pc + 3);
+        var startSp = start.Sp;
+        return StepUntil(
+            maxInstructions,
+            registers => ParseWord(registers.Pc) == returnAddress && ParseByte(registers.Sp) >= startSp,
+            "step_over");
+    }
+
+    public DebugResult<ContinueResult> StepOut(int maxInstructions)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<ContinueResult>();
+        }
+
+        var startSp = NesCore.DebugReadRegisters().Sp;
+        return StepUntil(maxInstructions, registers => ParseByte(registers.Sp) > startSp, "step_out");
+    }
+
+    public DebugResult<RunUntilConditionResult> RunUntilCondition(string condition, int maxInstructions, int maxFrames)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<RunUntilConditionResult>();
+        }
+
+        if (!BreakpointCondition.TryParse(condition, out var parsedCondition, out var conditionError) || parsedCondition is null)
+        {
+            return DebugResult<RunUntilConditionResult>.Failure("invalid_condition", $"Invalid condition: {conditionError ?? "Condition is required."}");
+        }
+
+        watchHit = null;
+        var startFrames = NesCore.frame_count;
+        AttachReadObserverIfNeeded();
+        try
+        {
+            for (var i = 0; i < maxInstructions; i++)
+            {
+                var before = ToRegisters(NesCore.DebugReadRegisters());
+                var conditionResult = parsedCondition.Evaluate(new ConditionContext(this, before));
+                if (!conditionResult.IsSuccess)
+                {
+                    return DebugResult<RunUntilConditionResult>.Failure(conditionResult.Error!.Code, conditionResult.Error.Message);
+                }
+
+                if (conditionResult.Value)
+                {
+                    return StopRunUntilCondition("condition", before, (uint)i, startFrames);
+                }
+
+                var hit = IsBreakpointHit(ParseWord(before.Pc), before);
+                if (!hit.IsSuccess)
+                {
+                    return DebugResult<RunUntilConditionResult>.Failure(hit.Error!.Code, hit.Error.Message);
+                }
+
+                if (hit.Value)
+                {
+                    return StopRunUntilCondition("breakpoint", before, (uint)i, startFrames);
+                }
+
+                if (NesCore.frame_count - startFrames >= maxFrames)
+                {
+                    return StopRunUntilCondition("maxFrames", before, (uint)i, startFrames);
+                }
+
+                StepMachineInstruction();
+
+                var after = ToRegisters(NesCore.DebugReadRegisters());
+                conditionResult = parsedCondition.Evaluate(new ConditionContext(this, after));
+                if (!conditionResult.IsSuccess)
+                {
+                    return DebugResult<RunUntilConditionResult>.Failure(conditionResult.Error!.Code, conditionResult.Error.Message);
+                }
+
+                if (conditionResult.Value)
+                {
+                    return StopRunUntilCondition("condition", after, (uint)i + 1, startFrames);
+                }
+
+                if (watchHit.HasValue)
+                {
+                    return StopRunUntilCondition("watchpoint", after, (uint)i + 1, startFrames);
+                }
+
+                if (NesCore.frame_count - startFrames >= maxFrames)
+                {
+                    return StopRunUntilCondition("maxFrames", after, (uint)i + 1, startFrames);
+                }
+            }
+
+            return StopRunUntilCondition("maxInstructions", ToRegisters(NesCore.DebugReadRegisters()), (uint)maxInstructions, startFrames);
+        }
+        catch (Exception ex)
+        {
+            return DebugResult<RunUntilConditionResult>.Failure("run_until_condition_failed", ex.Message);
+        }
+        finally
+        {
+            DetachReadObserver();
+        }
+    }
 
     public DebugResult<BreakpointSetResult> SetBreakpoint(ushort address, string? condition)
     {
@@ -547,14 +710,132 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
             new ScreenCaptureResult(ScreenWidth, ScreenHeight, "image/png", PngEncoder.EncodeRgb24(pixels, ScreenWidth, ScreenHeight)));
     }
 
-    public DebugResult<LastWriterResult> FindLastWriter(ushort address) => Unsupported<LastWriterResult>("find_last_writer");
+    public DebugResult<LastWriterResult> FindLastWriter(ushort address)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<LastWriterResult>();
+        }
 
-    public DebugResult<LastWritersResult> FindLastWriters(ushort address, int length) => Unsupported<LastWritersResult>("find_last_writers");
+        return lastWriters.TryGetValue(address, out var record)
+            ? DebugResult<LastWriterResult>.Success(new LastWriterResult(true, Hex.FormatWord(address), Hex.FormatWord(record.Pc), Hex.FormatByte(record.Value), record.Count))
+            : DebugResult<LastWriterResult>.Success(new LastWriterResult(false, Hex.FormatWord(address), null, null, 0));
+    }
 
-    public DebugResult<TraceUntilWriteResult> TraceUntilWrite(ushort address, int maxInstructions) => Unsupported<TraceUntilWriteResult>("trace_until_write");
+    public DebugResult<LastWritersResult> FindLastWriters(ushort address, int length)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<LastWritersResult>();
+        }
 
-    public DebugResult<TraceUntilWriteRangeResult> TraceUntilWriteRange(ushort address, int length, int maxInstructions) =>
-        Unsupported<TraceUntilWriteRangeResult>("trace_until_write_range");
+        if (length < 1 || address + length > 0x10000)
+        {
+            return DebugResult<LastWritersResult>.Failure("invalid_range", "Writer range must fit within 0x0000..0xFFFF.");
+        }
+
+        var writers = Enumerable.Range(0, length)
+            .Select(offset =>
+            {
+                var current = (ushort)(address + offset);
+                return lastWriters.TryGetValue(current, out var record)
+                    ? new LastWriterResult(true, Hex.FormatWord(current), Hex.FormatWord(record.Pc), Hex.FormatByte(record.Value), record.Count)
+                    : new LastWriterResult(false, Hex.FormatWord(current), null, null, 0);
+            })
+            .ToArray();
+
+        return DebugResult<LastWritersResult>.Success(new LastWritersResult(writers));
+    }
+
+    public DebugResult<TraceUntilWriteResult> TraceUntilWrite(ushort address, int maxInstructions)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<TraceUntilWriteResult>();
+        }
+
+        traceAddress = address;
+        traceLength = 1;
+        traceHit = false;
+        uint instructionsRun = 0;
+        try
+        {
+            for (var i = 0; i < maxInstructions && !traceHit; i++)
+            {
+                StepMachineInstruction();
+                instructionsRun++;
+            }
+        }
+        finally
+        {
+            traceAddress = -1;
+            traceLength = 0;
+        }
+
+        var registers = ToRegisters(NesCore.DebugReadRegisters());
+        return DebugResult<TraceUntilWriteResult>.Success(traceHit
+            ? new TraceUntilWriteResult(true, "write", Hex.FormatWord(address), Hex.FormatWord(traceHitPc), Hex.FormatByte(traceHitValue), instructionsRun, registers, GetTimeline())
+            : new TraceUntilWriteResult(true, "maxInstructions", Hex.FormatWord(address), null, null, instructionsRun, registers, GetTimeline()));
+    }
+
+    public DebugResult<TraceUntilWriteRangeResult> TraceUntilWriteRange(ushort address, int length, int maxInstructions)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<TraceUntilWriteRangeResult>();
+        }
+
+        if (length < 1 || address + length > 0x10000)
+        {
+            return DebugResult<TraceUntilWriteRangeResult>.Failure("invalid_range", "Trace range must fit within 0x0000..0xFFFF.");
+        }
+
+        traceAddress = address;
+        traceLength = length;
+        traceHit = false;
+        uint instructionsRun = 0;
+        try
+        {
+            for (var i = 0; i < maxInstructions && !traceHit; i++)
+            {
+                StepMachineInstruction();
+                instructionsRun++;
+            }
+        }
+        finally
+        {
+            traceAddress = -1;
+            traceLength = 0;
+        }
+
+        var registers = ToRegisters(NesCore.DebugReadRegisters());
+        var ppu = ReadPpuState();
+        if (!ppu.IsSuccess)
+        {
+            return DebugResult<TraceUntilWriteRangeResult>.Failure(ppu.Error!.Code, ppu.Error.Message);
+        }
+
+        var disassemblyAddress = traceHit ? traceHitPc : ParseWord(registers.Pc);
+        var disassembly = Disassemble(disassemblyAddress, 4);
+        if (!disassembly.IsSuccess)
+        {
+            return DebugResult<TraceUntilWriteRangeResult>.Failure(disassembly.Error!.Code, disassembly.Error.Message);
+        }
+
+        return DebugResult<TraceUntilWriteRangeResult>.Success(new TraceUntilWriteRangeResult(
+            true,
+            traceHit ? "write" : "maxInstructions",
+            Hex.FormatWord(address),
+            length,
+            traceHit ? Hex.FormatWord(traceHitAddress) : null,
+            traceHit ? Hex.FormatWord(traceHitPc) : null,
+            traceHit ? Hex.FormatByte(traceHitValue) : null,
+            instructionsRun,
+            registers,
+            ppu.Value,
+            disassembly.Value,
+            GetTimeline()));
+    }
 
     public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format)
     {
@@ -768,6 +1049,25 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
     {
         disposed = true;
         NesCore.exit = true;
+        NesCore.DebugSetMemoryObservers(null, null);
+    }
+
+    private void InitializeDebugTracking()
+    {
+        lastWriters.Clear();
+        trackWrites = true;
+        trackReads = false;
+        watchHit = null;
+        traceAddress = -1;
+        traceLength = 0;
+        traceHit = false;
+        NesCore.DebugSetMemoryObservers(OnMemoryWrite, null);
+    }
+
+    private void StepMachineInstruction()
+    {
+        NesCore.DebugStepInstruction();
+        totalInstructions++;
     }
 
     private byte[] ReadBytes(ushort address, int length)
@@ -779,6 +1079,185 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
         }
 
         return bytes;
+    }
+
+    private void OnMemoryWrite(ushort address, byte value, ushort pc)
+    {
+        if (!trackWrites)
+        {
+            return;
+        }
+
+        lastWriters[address] = lastWriters.TryGetValue(address, out var existing)
+            ? new WriteRecord(pc, value, existing.Count + 1)
+            : new WriteRecord(pc, value, 1);
+
+        if (traceAddress >= 0 && address >= traceAddress && address < traceAddress + traceLength)
+        {
+            traceHit = true;
+            traceHitAddress = address;
+            traceHitPc = pc;
+            traceHitValue = value;
+        }
+
+        if (watchpoints.TryMatch(address, isWrite: true, out var watchpoint))
+        {
+            watchHit = new WatchHit(address, watchpoint.Mode, pc, value);
+        }
+    }
+
+    private void OnMemoryRead(ushort address, ushort pc)
+    {
+        if (!trackReads)
+        {
+            return;
+        }
+
+        if (watchpoints.TryMatch(address, isWrite: false, out var watchpoint))
+        {
+            watchHit = new WatchHit(address, watchpoint.Mode, pc, null);
+        }
+    }
+
+    private DebugResult<ContinueResult> ContinueStopped(string reason, ulong instructionsRun)
+    {
+        var registers = ReadRegisters();
+        return registers.IsSuccess
+            ? Stop(reason, registers.Value, instructionsRun)
+            : DebugResult<ContinueResult>.Failure(registers.Error!.Code, registers.Error.Message);
+    }
+
+    private DebugResult<ContinueResult> StepSingle(string reason)
+    {
+        watchHit = null;
+        AttachReadObserverIfNeeded();
+        try
+        {
+            StepMachineInstruction();
+            var registers = ToRegisters(NesCore.DebugReadRegisters());
+            if (watchHit.HasValue)
+            {
+                return Stop("watchpoint", registers, 1);
+            }
+
+            var breakpoint = IsBreakpointHit(ParseWord(registers.Pc), registers);
+            if (!breakpoint.IsSuccess)
+            {
+                return DebugResult<ContinueResult>.Failure(breakpoint.Error!.Code, breakpoint.Error.Message);
+            }
+
+            return breakpoint.Value ? Stop("breakpoint", registers, 1) : Stop(reason, registers, 1);
+        }
+        finally
+        {
+            DetachReadObserver();
+        }
+    }
+
+    private DebugResult<ContinueResult> StepUntil(int maxInstructions, Func<NesCpuRegisters, bool> completed, string completedReason)
+    {
+        watchHit = null;
+        AttachReadObserverIfNeeded();
+        try
+        {
+            for (var i = 0; i < maxInstructions; i++)
+            {
+                StepMachineInstruction();
+                var registers = ToRegisters(NesCore.DebugReadRegisters());
+                if (watchHit.HasValue)
+                {
+                    return Stop("watchpoint", registers, (ulong)i + 1);
+                }
+
+                var breakpoint = IsBreakpointHit(ParseWord(registers.Pc), registers);
+                if (!breakpoint.IsSuccess)
+                {
+                    return DebugResult<ContinueResult>.Failure(breakpoint.Error!.Code, breakpoint.Error.Message);
+                }
+
+                if (breakpoint.Value)
+                {
+                    return Stop("breakpoint", registers, (ulong)i + 1);
+                }
+
+                if (completed(registers))
+                {
+                    return Stop(completedReason, registers, (ulong)i + 1);
+                }
+            }
+
+            return Stop("maxInstructions", ToRegisters(NesCore.DebugReadRegisters()), (ulong)maxInstructions);
+        }
+        finally
+        {
+            DetachReadObserver();
+        }
+    }
+
+    private DebugResult<bool> IsBreakpointHit(ushort address, NesCpuRegisters registers)
+    {
+        foreach (var breakpoint in breakpoints.FindAll(address))
+        {
+            var shouldBreak = ShouldBreak(breakpoint, registers);
+            if (!shouldBreak.IsSuccess)
+            {
+                return shouldBreak;
+            }
+
+            if (shouldBreak.Value)
+            {
+                return DebugResult<bool>.Success(true);
+            }
+        }
+
+        return DebugResult<bool>.Success(false);
+    }
+
+    private DebugResult<bool> ShouldBreak(BreakpointInfo breakpoint, NesCpuRegisters registers)
+    {
+        if (breakpoint.ParsedCondition is null)
+        {
+            return string.IsNullOrWhiteSpace(breakpoint.Condition)
+                ? DebugResult<bool>.Success(true)
+                : DebugResult<bool>.Failure("invalid_breakpoint_condition", $"Breakpoint '{breakpoint.Id}' has an invalid condition.");
+        }
+
+        return breakpoint.ParsedCondition.Evaluate(new ConditionContext(this, registers));
+    }
+
+    private void AttachReadObserverIfNeeded()
+    {
+        trackReads = watchpoints.HasEnabledReadWatchpoints;
+        NesCore.DebugSetMemoryObservers(OnMemoryWrite, trackReads ? OnMemoryRead : null);
+    }
+
+    private void DetachReadObserver()
+    {
+        trackReads = false;
+        if (romLoaded && !disposed)
+        {
+            NesCore.DebugSetMemoryObservers(OnMemoryWrite, null);
+        }
+    }
+
+    private DebugResult<RunUntilConditionResult> StopRunUntilCondition(
+        string reason,
+        NesCpuRegisters registers,
+        uint instructionsRun,
+        long startFrames)
+    {
+        var ppu = ReadPpuState();
+        return ppu.IsSuccess
+            ? DebugResult<RunUntilConditionResult>.Success(new RunUntilConditionResult(
+                true,
+                reason,
+                registers.Pc,
+                instructionsRun,
+                (ulong)Math.Max(0, NesCore.frame_count - startFrames),
+                registers,
+                ppu.Value,
+                GetTimeline()))
+            : DebugResult<RunUntilConditionResult>.Failure(ppu.Error!.Code, ppu.Error.Message);
     }
 
     private static byte[] ReadPpuBytes(ushort address, int length)
@@ -831,6 +1310,9 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
             histogram,
             rowHashes);
     }
+
+    private DebugResult<ContinueResult> Stop(string reason, NesCpuRegisters registers, ulong instructionsRun = 0) =>
+        DebugResult<ContinueResult>.Success(new ContinueResult(true, reason, registers.Pc, registers, GetTimeline(), instructionsRun));
 
     private TimelineCounters GetTimeline() =>
         new((ulong)Math.Max(0, NesCore.frame_count), NesCore.DebugReadRegisters().Cycles, totalInstructions);
@@ -934,6 +1416,18 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
         _ => mode.ToString().ToLowerInvariant(),
     };
 
+    private static ushort ParseWord(string text)
+    {
+        var normalized = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text;
+        return Convert.ToUInt16(normalized, 16);
+    }
+
+    private static byte ParseByte(string text)
+    {
+        var normalized = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text;
+        return Convert.ToByte(normalized, 16);
+    }
+
     private static string ButtonName(NesButton button) => button switch
     {
         NesButton.A => "a",
@@ -949,9 +1443,6 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
 
     private static DebugResult<T> NoRom<T>() => DebugResult<T>.Failure("no_rom_loaded", "Load a ROM before using this tool.");
 
-    private static DebugResult<T> Unsupported<T>(string feature) =>
-        DebugResult<T>.Failure("not_supported", $"The AprNes backend does not support '{feature}' yet.");
-
     private static DebugResult<NesRomHeader> ParseHeader(byte[] bytes)
     {
         if (bytes.Length < 16 || bytes[0] != 'N' || bytes[1] != 'E' || bytes[2] != 'S' || bytes[3] != 0x1A)
@@ -964,6 +1455,27 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
         var mapper = ((flags7 & 0xF0) | (flags6 >> 4)) & 0xFF;
         return DebugResult<NesRomHeader>.Success(new NesRomHeader(mapper, bytes[4], bytes[5]));
     }
+
+    private sealed class ConditionContext(AprNesDebugSession session, NesCpuRegisters registers) : INesBreakpointConditionContext
+    {
+        public NesCpuRegisters Registers { get; } = registers;
+
+        public DebugResult<byte> ReadByte(ushort address)
+        {
+            try
+            {
+                return DebugResult<byte>.Success(session.ReadBytes(address, 1)[0]);
+            }
+            catch (Exception ex)
+            {
+                return DebugResult<byte>.Failure("read_memory_failed", ex.Message);
+            }
+        }
+    }
+
+    private readonly record struct WriteRecord(ushort Pc, byte Value, ulong Count);
+
+    private readonly record struct WatchHit(ushort Address, WatchpointMode Mode, ushort Pc, byte? Value);
 
     private sealed record NesRomHeader(int Mapper, int PrgRomBanks, int ChrRomBanks);
 }

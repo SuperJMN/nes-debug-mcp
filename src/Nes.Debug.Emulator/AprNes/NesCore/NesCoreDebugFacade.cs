@@ -46,6 +46,9 @@ unsafe public partial class NesCore
 
     private static ulong debugCpuCycles;
     private static bool debugTimingInitialized;
+    private static ushort debugCurrentInstructionPc;
+    private static Action<ushort, byte, ushort>? debugWriteObserver;
+    private static Action<ushort, ushort>? debugReadObserver;
 
     public static bool DebugLoad(byte[] romBytes)
     {
@@ -55,6 +58,8 @@ unsafe public partial class NesCore
         Region = RegionType.NTSC;
         debugCpuCycles = 0;
         debugTimingInitialized = false;
+        debugCurrentInstructionPc = 0;
+        DebugSetMemoryObservers(null, null);
 
         if (!init(romBytes))
         {
@@ -68,6 +73,7 @@ unsafe public partial class NesCore
 
     public static void DebugStepInstruction()
     {
+        debugCurrentInstructionPc = r_PC;
         var observedBody = false;
         for (var i = 0; i < MaxCpuCyclesPerInstruction; i++)
         {
@@ -118,6 +124,14 @@ unsafe public partial class NesCore
     public static byte DebugReadCpu(ushort address) => CpuRead(address);
 
     public static void DebugWriteCpu(ushort address, byte value) => CpuWrite(address, value);
+
+    public static void DebugSetMemoryObservers(
+        Action<ushort, byte, ushort>? writeObserver,
+        Action<ushort, ushort>? readObserver)
+    {
+        debugWriteObserver = writeObserver;
+        debugReadObserver = readObserver;
+    }
 
     public static byte DebugReadPpu(ushort address) => PpuBusRead(address);
 

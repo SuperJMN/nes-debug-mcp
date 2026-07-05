@@ -1,3 +1,4 @@
+using Nes.Debug.Core;
 using Nes.Debug.Emulator;
 
 namespace Nes.Debug.Tests;
@@ -103,7 +104,160 @@ public sealed class AprNesDebugSessionTests
         Assert.Equal("81", bankAfterLoad.Value.BytesHex);
     }
 
+    [Fact]
+    public void Continue_until_break_honors_conditional_breakpoints()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x01, // LDA #$01
+            0xEA,       // NOP
+            0xA9, 0x02, // LDA #$02
+            0xEA,       // NOP
+            0x4C, 0x05, 0x80, // JMP $8005
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var breakpoint = session.SetBreakpoint(0x8005, "A == 2");
+        var run = session.ContinueUntilBreak(10);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(breakpoint.IsSuccess, breakpoint.Error?.Message);
+        Assert.True(run.IsSuccess, run.Error?.Message);
+        Assert.Equal("breakpoint", run.Value.Reason);
+        Assert.Equal("0x8005", run.Value.Pc);
+        Assert.Equal("0x02", run.Value.Registers.A);
+    }
+
+    [Fact]
+    public void Continue_until_break_stops_on_watchpoint_and_records_last_writer()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x7B, // LDA #$7B
+            0x85, 0x02, // STA $02
+            0x4C, 0x04, 0x80, // JMP $8004
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var watchpoint = session.SetWatchpoint(0x0002, WatchpointMode.Write);
+        var run = session.ContinueUntilBreak(10);
+        var writer = session.FindLastWriter(0x0002);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(watchpoint.IsSuccess, watchpoint.Error?.Message);
+        Assert.True(run.IsSuccess, run.Error?.Message);
+        Assert.True(writer.IsSuccess, writer.Error?.Message);
+        Assert.Equal("watchpoint", run.Value.Reason);
+        Assert.Equal("0x8002", writer.Value.Pc);
+        Assert.Equal("0x7B", writer.Value.Value);
+    }
+
+    [Fact]
+    public void Run_until_condition_stops_on_memory_predicate_and_reports_ppu_state()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x2A, // LDA #$2A
+            0x85, 0x02, // STA $02
+            0x4C, 0x04, 0x80, // JMP $8004
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var run = session.RunUntilCondition("[0x0002] == 0x2A", maxInstructions: 10, maxFrames: 1);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(run.IsSuccess, run.Error?.Message);
+        Assert.Equal("condition", run.Value.Reason);
+        Assert.Equal("0x8004", run.Value.Pc);
+        Assert.True(run.Value.InstructionsRun > 0);
+        Assert.NotNull(run.Value.PpuState);
+    }
+
+    [Fact]
+    public void Trace_until_write_range_reports_concrete_hit_address_and_last_writers()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x7B, // LDA #$7B
+            0x85, 0x02, // STA $02
+            0x4C, 0x04, 0x80, // JMP $8004
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var trace = session.TraceUntilWriteRange(0x0001, length: 4, maxInstructions: 10);
+        var writers = session.FindLastWriters(0x0001, 4);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(trace.IsSuccess, trace.Error?.Message);
+        Assert.True(writers.IsSuccess, writers.Error?.Message);
+        Assert.Equal("write", trace.Value.Reason);
+        Assert.Equal("0x0001", trace.Value.Address);
+        Assert.Equal("0x0002", trace.Value.HitAddress);
+        Assert.Equal("0x7B", trace.Value.Value);
+        Assert.NotEmpty(trace.Value.Disassembly.Instructions);
+        var writer = Assert.Single(writers.Value.Writers, item => item.Found);
+        Assert.Equal("0x0002", writer.Address);
+        Assert.Equal("0x7B", writer.Value);
+    }
+
+    [Fact]
+    public void Step_over_runs_jsr_and_stops_at_return_address()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0x20, 0x06, 0x80, // JSR $8006
+            0xA9, 0x55,       // LDA #$55
+            0xEA,             // NOP
+            0xA9, 0x42,       // LDA #$42
+            0x60,             // RTS
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var step = session.StepOver(10);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(step.IsSuccess, step.Error?.Message);
+        Assert.Equal("step_over", step.Value.Reason);
+        Assert.Equal("0x8003", step.Value.Pc);
+        Assert.Equal("0x42", step.Value.Registers.A);
+    }
+
+    [Fact]
+    public void Step_out_runs_until_current_subroutine_returns()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0x20, 0x06, 0x80, // JSR $8006
+            0xA9, 0x55,       // LDA #$55
+            0xEA,             // NOP
+            0xA9, 0x42,       // LDA #$42
+            0x60,             // RTS
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var enterSubroutine = session.StepInstruction(1);
+        var step = session.StepOut(10);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(enterSubroutine.IsSuccess, enterSubroutine.Error?.Message);
+        Assert.True(step.IsSuccess, step.Error?.Message);
+        Assert.Equal("step_out", step.Value.Reason);
+        Assert.Equal("0x8003", step.Value.Pc);
+        Assert.Equal("0x42", step.Value.Registers.A);
+    }
+
     private static byte[] CreateMinimalMmc3()
+    {
+        return CreateProgramMmc3([0xA9, 0x42, 0xEA, 0x4C, 0x02, 0x80]);
+    }
+
+    private static byte[] CreateProgramMmc3(byte[] program)
     {
         var rom = new byte[16 + 2 * 16 * 1024 + 8 * 1024];
         rom[0] = (byte)'N';
@@ -115,7 +269,7 @@ public sealed class AprNesDebugSessionTests
         rom[6] = 0x40;
 
         var prg = rom.AsSpan(16, 2 * 16 * 1024);
-        new byte[] { 0xA9, 0x42, 0xEA, 0x4C, 0x02, 0x80 }.CopyTo(prg);
+        program.CopyTo(prg);
         prg[0x7FFC] = 0x00;
         prg[0x7FFD] = 0x80;
         return rom;
