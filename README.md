@@ -2,7 +2,9 @@
 
 `Nes.Mcp` is a cross-platform .NET MCP server for inspecting and controlling NES ROMs in iNES format.
 
-The first backend is a pure managed, vendored copy of the MIT-licensed [ADNES](https://github.com/enusbaum/ADNES) emulator core, wrapped with a synchronous debug session. The MCP server exposes CPU stepping, frame execution, deterministic controller input timelines, breakpoints/watchpoints, CPU memory reads/writes, PPU/OAM inspection, symbols, lightweight disassembly, savestates, write tracing, screen-region probes, and PNG screen capture.
+The default backend is a pure managed, vendored copy of the MIT-licensed [ADNES](https://github.com/enusbaum/ADNES) emulator core, wrapped with a synchronous debug session. The MCP server exposes CPU stepping, frame execution, deterministic controller input timelines, breakpoints/watchpoints, CPU memory reads/writes, PPU/OAM inspection, symbols, lightweight disassembly, savestates, write tracing, screen-region probes, and PNG screen capture.
+
+An experimental AprNes backend is available for broader mapper coverage. By default `Nes.Mcp` runs in `auto` mode: ADNES is used for mappers 0-3, and AprNes is used for other mappers. The AprNes backend currently supports load/reset/step/frame/controller/memory/PPU/OAM/screen/tilemap workflows, while savestates, continue/break/watch execution stops, and write tracing still return `not_supported`.
 
 ## Build
 
@@ -23,6 +25,14 @@ From the repo root:
 ```bash
 dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
 ```
+
+To force the experimental AprNes backend for every ROM:
+
+```bash
+NES_MCP_EMULATOR_BACKEND=aprnes dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
+```
+
+Valid backend values are `auto`, `adnes`, and `aprnes`.
 
 ## Connect An MCP Client
 
@@ -107,7 +117,8 @@ See [docs/mcp-tools.md](docs/mcp-tools.md) for schemas and examples.
 
 ## Current Limitations
 
-- The initial backend supports the mappers implemented by ADNES: NROM, MMC1, UxROM, and CNROM.
+- The default `auto` backend uses ADNES for NROM, MMC1, UxROM, and CNROM, then falls back to AprNes for broader mapper coverage, including MMC3.
+- The experimental AprNes backend does not yet implement the full debug-control surface.
 - Debug stepping, conditional breakpoints, and watchpoints are implemented in the managed session loop.
 - Disassembly is intentionally small and currently covers the opcodes most useful for first smoke/debug work; unknown opcodes are returned as `.db`.
 - Symbol parsing is intentionally simple: `BANK:ADDR Name` and `ADDR Name` lines with `;` or `#` comments.
@@ -123,3 +134,5 @@ git diff --check
 ## Third-Party Code
 
 The emulator core under `src/Nes.Debug.Emulator/Adnes/` is vendored from ADNES by Eric Nusbaum and is MIT licensed. See [src/Nes.Debug.Emulator/ADNES-LICENSE.txt](src/Nes.Debug.Emulator/ADNES-LICENSE.txt).
+
+The emulator core under `src/Nes.Debug.Emulator/AprNes/NesCore/` is vendored from [AprNes](https://github.com/erspicu/AprNes) and is WTFPL licensed. See [src/Nes.Debug.Emulator/AprNes/APRNES-LICENSE.txt](src/Nes.Debug.Emulator/AprNes/APRNES-LICENSE.txt).
