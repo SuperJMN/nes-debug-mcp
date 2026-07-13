@@ -508,31 +508,10 @@ public static class NesDebugTools
             return Error("invalid_max_events", $"maxEvents must be between 1 and {PpuRegisterTracing.MaxEvents}.");
         }
 
-        IReadOnlySet<ushort> selectedRegisters;
-        if (registers is null || registers.Length == 0)
+        var parsedRegisters = ParsePpuRegisters(registers, "registers");
+        if (!parsedRegisters.IsSuccess)
         {
-            selectedRegisters = PpuRegisterTracing.DefaultRegisters;
-        }
-        else
-        {
-            if (registers.Length > 8)
-            {
-                return Error("invalid_ppu_registers", "registers must contain between 1 and 8 values from $2000-$2007.");
-            }
-
-            var parsedRegisters = new HashSet<ushort>();
-            foreach (var register in registers)
-            {
-                var parsed = ParsePpuRegister(register);
-                if (!parsed.IsSuccess)
-                {
-                    return new ToolError(parsed.Error!);
-                }
-
-                parsedRegisters.Add(parsed.Value);
-            }
-
-            selectedRegisters = parsedRegisters;
+            return new ToolError(parsedRegisters.Error!);
         }
 
         var parsedButtons = ParseButtons(buttons ?? []);
@@ -542,7 +521,7 @@ public static class NesDebugTools
         }
 
         return ToToolResult(session.TracePpuRegisterWrites(
-            new PpuRegisterTraceRequest(frameCount, maxEvents, selectedRegisters, parsedButtons.Value)));
+            new PpuRegisterTraceRequest(frameCount, maxEvents, parsedRegisters.Value, parsedButtons.Value)));
     }
 
     [McpServerTool(Name = "read_screen_region", ReadOnly = true, Destructive = false)]
@@ -637,31 +616,10 @@ public static class NesDebugTools
             return Error("invalid_memory_probe_total", $"Memory probes may read at most {ExecutionObserver.MaxMemoryBytesPerFrame} bytes per frame in total.");
         }
 
-        IReadOnlySet<ushort> selectedRegisters;
-        if (ppuRegisters is null || ppuRegisters.Length == 0)
+        var parsedRegisters = ParsePpuRegisters(ppuRegisters, "ppuRegisters");
+        if (!parsedRegisters.IsSuccess)
         {
-            selectedRegisters = PpuRegisterTracing.DefaultRegisters;
-        }
-        else
-        {
-            if (ppuRegisters.Length > 8)
-            {
-                return Error("invalid_ppu_registers", "ppuRegisters must contain between 1 and 8 values from $2000-$2007.");
-            }
-
-            var parsedRegisters = new HashSet<ushort>();
-            foreach (var register in ppuRegisters)
-            {
-                var parsed = ParsePpuRegister(register);
-                if (!parsed.IsSuccess)
-                {
-                    return new ToolError(parsed.Error!);
-                }
-
-                parsedRegisters.Add(parsed.Value);
-            }
-
-            selectedRegisters = parsedRegisters;
+            return new ToolError(parsedRegisters.Error!);
         }
 
         return ToToolResult(session.ObserveExecution(new ExecutionObservationRequest(
@@ -671,7 +629,7 @@ public static class NesDebugTools
             includePpuState,
             tracePpuWrites,
             maxPpuEvents,
-            selectedRegisters)));
+            parsedRegisters.Value)));
     }
 
     [McpServerTool(Name = "run_input_timeline", ReadOnly = false, Destructive = false)]
@@ -797,6 +755,35 @@ public static class NesDebugTools
     }
 
     private static DebugResult<NesAddress> ParseAddress(string address) => NesAddress.Parse(address);
+
+    private static DebugResult<IReadOnlySet<ushort>> ParsePpuRegisters(string[]? registers, string parameterName)
+    {
+        if (registers is null || registers.Length == 0)
+        {
+            return DebugResult<IReadOnlySet<ushort>>.Success(PpuRegisterTracing.DefaultRegisters);
+        }
+
+        if (registers.Length > 8)
+        {
+            return DebugResult<IReadOnlySet<ushort>>.Failure(
+                "invalid_ppu_registers",
+                $"{parameterName} must contain between 1 and 8 values from $2000-$2007.");
+        }
+
+        var selected = new HashSet<ushort>();
+        foreach (var register in registers)
+        {
+            var parsed = ParsePpuRegister(register);
+            if (!parsed.IsSuccess)
+            {
+                return DebugResult<IReadOnlySet<ushort>>.Failure(parsed.Error!.Code, parsed.Error.Message);
+            }
+
+            selected.Add(parsed.Value);
+        }
+
+        return DebugResult<IReadOnlySet<ushort>>.Success(selected);
+    }
 
     private static DebugResult<ushort> ParsePpuRegister(string register)
     {

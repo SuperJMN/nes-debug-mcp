@@ -413,6 +413,16 @@ public sealed class McpToolValidationTests
     }
 
     [Fact]
+    public void Tilemap_result_preserves_the_legacy_four_argument_constructor()
+    {
+        var result = new TilemapDumpResult("0x2000", 32, 30, ["00"]);
+
+        Assert.Equal("0x2000", result.Address);
+        Assert.Empty(result.AttributeAddress);
+        Assert.Empty(result.AttributeRows);
+    }
+
+    [Fact]
     public void Run_input_timeline_rejects_tilemap_addresses_that_are_not_nametable_bases()
     {
         var session = new FakeDebugSession();

@@ -236,7 +236,9 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
             new StepInstructionResult(Hex.FormatWord(before.Pc), registers.Pc, registers, disassembly, count, GetTimeline()));
     }
 
-    public DebugResult<RunFrameResult> RunFrame(int count)
+    public DebugResult<RunFrameResult> RunFrame(int count) => RunFrame(count, stopAtBreakpoint: false);
+
+    private DebugResult<RunFrameResult> RunFrame(int count, bool stopAtBreakpoint)
     {
         if (!romLoaded)
         {
@@ -257,22 +259,25 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
                         $"Frame execution exceeded {PpuRegisterTracing.MaxInstructionsPerFrame} instructions per requested frame.");
                 }
 
-                var registers = ToRegisters(NesCore.DebugReadRegisters());
-                var breakpoint = IsBreakpointHit(ParseWord(registers.Pc), registers);
-                if (!breakpoint.IsSuccess)
+                if (stopAtBreakpoint)
                 {
-                    return DebugResult<RunFrameResult>.Failure(breakpoint.Error!.Code, breakpoint.Error.Message);
-                }
+                    var registers = ToRegisters(NesCore.DebugReadRegisters());
+                    var breakpoint = IsBreakpointHit(ParseWord(registers.Pc), registers);
+                    if (!breakpoint.IsSuccess)
+                    {
+                        return DebugResult<RunFrameResult>.Failure(breakpoint.Error!.Code, breakpoint.Error.Message);
+                    }
 
-                if (breakpoint.Value)
-                {
-                    return DebugResult<RunFrameResult>.Success(
-                        new RunFrameResult(
-                            Math.Max(0, NesCore.frame_count - startFrame),
-                            NesCore.frame_count,
-                            registers,
-                            true,
-                            GetTimeline()));
+                    if (breakpoint.Value)
+                    {
+                        return DebugResult<RunFrameResult>.Success(
+                            new RunFrameResult(
+                                Math.Max(0, NesCore.frame_count - startFrame),
+                                NesCore.frame_count,
+                                registers,
+                                true,
+                                GetTimeline()));
+                    }
                 }
 
                 StepMachineInstruction();
@@ -1038,7 +1043,7 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
         {
             for (var frameOffset = 1; frameOffset <= request.FrameCount; frameOffset++)
             {
-                var run = RunFrame(1);
+                var run = RunFrame(1, stopAtBreakpoint: true);
                 if (!run.IsSuccess)
                 {
                     return DebugResult<ExecutionObservationResult>.Failure(run.Error!.Code, run.Error.Message);

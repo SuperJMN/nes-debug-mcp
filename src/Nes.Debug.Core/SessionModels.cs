@@ -520,7 +520,13 @@ public sealed record TilemapDumpResult(
     [property: JsonPropertyName("height")] int Height,
     [property: JsonPropertyName("rows")] IReadOnlyList<string> Rows,
     [property: JsonPropertyName("attributeAddress")] string AttributeAddress,
-    [property: JsonPropertyName("attributeRows")] IReadOnlyList<string> AttributeRows);
+    [property: JsonPropertyName("attributeRows")] IReadOnlyList<string> AttributeRows)
+{
+    public TilemapDumpResult(string address, int width, int height, IReadOnlyList<string> rows)
+        : this(address, width, height, rows, "", [])
+    {
+    }
+}
 
 public sealed record NametableDumpResult(
     [property: JsonPropertyName("detailsIncluded")] bool DetailsIncluded,

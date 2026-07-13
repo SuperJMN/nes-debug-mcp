@@ -426,13 +426,19 @@ public sealed class AprNesDebugSessionTests
         Assert.Equal(
             ["0x8002", "0x8007", "0x800C", "0x8011", "0x8016", "0x801B"],
             trace.Value.Events.Select(evt => evt.Pc));
-        Assert.True(trace.Value.Events.Zip(trace.Value.Events.Skip(1)).All(pair => pair.First.CpuCycle < pair.Second.CpuCycle));
-        Assert.True(trace.Value.Events.Zip(trace.Value.Events.Skip(1)).All(pair => pair.First.InstructionCounter < pair.Second.InstructionCounter));
+        Assert.Equal(6, trace.Value.EventsObserved);
+        Assert.All(trace.Value.Events.Zip(trace.Value.Events.Skip(1)), pair =>
+        {
+            Assert.Equal((ulong)6, pair.Second.CpuCycle - pair.First.CpuCycle);
+            Assert.Equal((ulong)2, pair.Second.InstructionCounter - pair.First.InstructionCounter);
+        });
         Assert.All(trace.Value.Events, evt =>
         {
             Assert.InRange(evt.Before.Scanline, 0, 261);
             Assert.InRange(evt.Before.Dot, 0, 340);
+            Assert.Equal(evt.Before.Scanline, evt.After.Scanline);
         });
+        Assert.Equal([1, 0, 0, 0, 0, 2], trace.Value.Events.Select(evt => evt.After.Dot - evt.Before.Dot));
         Assert.Equal("0x0405", trace.Value.Events[2].Before.T);
         Assert.Equal(5, trace.Value.Events[2].Before.X);
         Assert.True(trace.Value.Events[2].Before.W);
@@ -486,26 +492,23 @@ public sealed class AprNesDebugSessionTests
     }
 
     [Fact]
-    public void Run_frame_updates_instruction_timeline_and_observe_screen_honors_breakpoints()
+    public void Run_frame_preserves_full_frame_semantics_when_a_breakpoint_is_set()
     {
         using var temp = new TempRom(CreateMinimalMmc3());
         using var session = new AprNesDebugSession();
 
         var load = session.LoadRom(temp.Path);
-        var run = session.RunFrame(1);
         var registers = session.ReadRegisters();
         var breakpoint = session.SetBreakpoint(Convert.ToUInt16(registers.Value.Pc[2..], 16), null);
-        var observation = session.ObserveScreen(1);
+        var run = session.RunFrame(1);
 
         Assert.True(load.IsSuccess, load.Error?.Message);
-        Assert.True(run.IsSuccess, run.Error?.Message);
-        Assert.True(run.Value.Timeline.Instructions > 0);
         Assert.True(registers.IsSuccess, registers.Error?.Message);
         Assert.True(breakpoint.IsSuccess, breakpoint.Error?.Message);
-        Assert.True(observation.IsSuccess, observation.Error?.Message);
-        Assert.True(observation.Value.HitBreakpoint);
-        Assert.Equal(0, observation.Value.FramesRun);
-        Assert.Empty(observation.Value.Samples);
+        Assert.True(run.IsSuccess, run.Error?.Message);
+        Assert.Equal(1, run.Value.FramesRun);
+        Assert.False(run.Value.HitBreakpoint);
+        Assert.True(run.Value.Timeline.Instructions > 0);
     }
 
     [Fact]

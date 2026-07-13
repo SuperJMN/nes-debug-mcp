@@ -35,7 +35,7 @@ Execution and state results include a `timeline` object with cumulative `frames`
   ```json
   { "count": 1 }
   ```
-- `observe_screen`: atomically runs up to 600 frames and returns a SHA-256 identity for every rendered frame plus compact changes from the preceding frame. `changedPixels` and `changedBounds` locate the visible change; `changedTileRows` contains only affected 8x8 tile rows, where bit N in `mask` identifies tile column N. Observation stops early if a breakpoint is hit.
+- `observe_screen`: atomically runs up to 600 complete frames and returns a SHA-256 identity for every rendered frame plus compact changes from the preceding frame. `changedPixels` and `changedBounds` locate the visible change; `changedTileRows` contains only affected 8x8 tile rows, where bit N in `mask` identifies tile column N.
   ```json
   { "frameCount": 120 }
   ```
