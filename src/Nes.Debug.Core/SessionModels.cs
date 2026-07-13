@@ -358,6 +358,62 @@ public sealed record PpuRegisterSnapshot(
     [property: JsonPropertyName("x")] int X,
     [property: JsonPropertyName("w")] bool W);
 
+public sealed record MemoryProbe(ushort Address, int Length);
+
+public sealed class ExecutionMemoryProbeInput
+{
+    [JsonPropertyName("address")]
+    public string Address { get; init; } = "";
+
+    [JsonPropertyName("length")]
+    public int Length { get; init; }
+}
+
+public sealed record ExecutionObservationRequest(
+    int FrameCount,
+    IReadOnlyList<NesButton> Buttons,
+    IReadOnlyList<MemoryProbe> MemoryProbes,
+    bool IncludePpuState,
+    bool TracePpuWrites,
+    int MaxPpuEvents,
+    IReadOnlySet<ushort> PpuRegisters);
+
+public sealed record ExecutionObservationResult(
+    [property: JsonPropertyName("framesRequested")] int FramesRequested,
+    [property: JsonPropertyName("framesRun")] int FramesRun,
+    [property: JsonPropertyName("heldButtons")] IReadOnlyList<string> HeldButtons,
+    [property: JsonPropertyName("initialFramebufferHash")] string InitialFramebufferHash,
+    [property: JsonPropertyName("frames")] IReadOnlyList<ExecutionFrameObservation> Frames,
+    [property: JsonPropertyName("ppuEvents")] IReadOnlyList<PpuRegisterWriteEvent> PpuEvents,
+    [property: JsonPropertyName("ppuEventCount")] int PpuEventCount,
+    [property: JsonPropertyName("ppuEventsObserved")] int PpuEventsObserved,
+    [property: JsonPropertyName("ppuTraceTruncated")] bool PpuTraceTruncated,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("initialNametables")] NametableDumpResult InitialNametables,
+    [property: JsonPropertyName("finalNametables")] NametableDumpResult FinalNametables,
+    [property: JsonPropertyName("hitBreakpoint")] bool HitBreakpoint,
+    [property: JsonPropertyName("stopReason")] string StopReason,
+    [property: JsonPropertyName("released")] ControllerStateResult Released,
+    [property: JsonPropertyName("limits")] ExecutionObservationAppliedLimits Limits,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record ExecutionFrameObservation(
+    [property: JsonPropertyName("screen")] ScreenFrameObservation Screen,
+    [property: JsonPropertyName("memory")] IReadOnlyList<MemoryProbeObservation> Memory,
+    [property: JsonPropertyName("ppuState")] PpuStateResult? PpuState);
+
+public sealed record MemoryProbeObservation(
+    [property: JsonPropertyName("address")] string Address,
+    [property: JsonPropertyName("length")] int Length,
+    [property: JsonPropertyName("bytesHex")] string BytesHex);
+
+public sealed record ExecutionObservationAppliedLimits(
+    [property: JsonPropertyName("maxFrames")] int MaxFrames,
+    [property: JsonPropertyName("maxMemoryProbes")] int MaxMemoryProbes,
+    [property: JsonPropertyName("maxMemoryProbeLength")] int MaxMemoryProbeLength,
+    [property: JsonPropertyName("maxMemoryBytesPerFrame")] int MaxMemoryBytesPerFrame,
+    [property: JsonPropertyName("maxPpuEvents")] int MaxPpuEvents);
+
 public sealed record RunUntilConditionResult(
     [property: JsonPropertyName("stopped")] bool Stopped,
     [property: JsonPropertyName("reason")] string Reason,

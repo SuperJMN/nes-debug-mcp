@@ -1029,6 +1029,11 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IPaletteIndexFram
     public DebugResult<ScreenObservationResult> ObserveScreen(int frameCount) =>
         ScreenObserver.Observe(this, frameCount);
 
+    public DebugResult<ExecutionObservationResult> ObserveExecution(ExecutionObservationRequest request) =>
+        DebugResult<ExecutionObservationResult>.Failure(
+            "execution_observation_not_supported",
+            "Correlated execution observation requires the AprNes backend.");
+
     public DebugResult<int> CopyPaletteIndexFrame(Memory<byte> destination)
     {
         if (!romLoaded)

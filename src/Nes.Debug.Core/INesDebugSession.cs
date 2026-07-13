@@ -76,6 +76,8 @@ public interface INesDebugSession
 
     DebugResult<ScreenObservationResult> ObserveScreen(int frameCount);
 
+    DebugResult<ExecutionObservationResult> ObserveExecution(ExecutionObservationRequest request);
+
     DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps);
 
     DebugResult<NametableDumpResult> DumpNametables(bool includeDetails);

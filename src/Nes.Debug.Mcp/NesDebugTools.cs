@@ -574,6 +574,106 @@ public static class NesDebugTools
         return ToToolResult(session.ObserveScreen(frameCount));
     }
 
+    [McpServerTool(Name = "observe_execution", ReadOnly = false, Destructive = false)]
+    [Description("Atomically holds controller input for bounded AprNes frames and correlates compact framebuffer changes, RAM probes, optional PPU state, bounded PPU-register writes, nametable hashes, breakpoints, and timeline counters.")]
+    public static object ObserveExecution(
+        INesDebugSession session,
+        int frameCount = 60,
+        string[]? buttons = null,
+        ExecutionMemoryProbeInput[]? memoryProbes = null,
+        bool includePpuState = false,
+        bool tracePpuWrites = true,
+        int maxPpuEvents = 1000,
+        string[]? ppuRegisters = null)
+    {
+        if (frameCount is < 1 or > ExecutionObserver.MaxFrames)
+        {
+            return Error("invalid_frame_count", $"frameCount must be between 1 and {ExecutionObserver.MaxFrames}.");
+        }
+
+        if (maxPpuEvents is < 1 or > ExecutionObserver.MaxPpuEvents)
+        {
+            return Error("invalid_max_ppu_events", $"maxPpuEvents must be between 1 and {ExecutionObserver.MaxPpuEvents}.");
+        }
+
+        var parsedButtons = ParseButtons(buttons ?? []);
+        if (!parsedButtons.IsSuccess)
+        {
+            return new ToolError(parsedButtons.Error!);
+        }
+
+        memoryProbes ??= [];
+        if (memoryProbes.Length > ExecutionObserver.MaxMemoryProbes)
+        {
+            return Error("invalid_memory_probes", $"memoryProbes must contain at most {ExecutionObserver.MaxMemoryProbes} entries.");
+        }
+
+        var parsedProbes = new List<MemoryProbe>(memoryProbes.Length);
+        var totalProbeBytes = 0;
+        foreach (var probe in memoryProbes)
+        {
+            var parsedAddress = ParseAddress(probe.Address);
+            if (!parsedAddress.IsSuccess)
+            {
+                return new ToolError(parsedAddress.Error!);
+            }
+
+            if (probe.Length is < 1 or > ExecutionObserver.MaxMemoryProbeLength)
+            {
+                return Error("invalid_memory_probe_length", $"Each memory probe length must be between 1 and {ExecutionObserver.MaxMemoryProbeLength}.");
+            }
+
+            if (parsedAddress.Value.Address + probe.Length > 0x2000)
+            {
+                return Error("invalid_memory_probe_range", "Memory probes must stay within CPU RAM $0000-$1FFF.");
+            }
+
+            totalProbeBytes += probe.Length;
+            parsedProbes.Add(new MemoryProbe(parsedAddress.Value.Address, probe.Length));
+        }
+
+        if (totalProbeBytes > ExecutionObserver.MaxMemoryBytesPerFrame)
+        {
+            return Error("invalid_memory_probe_total", $"Memory probes may read at most {ExecutionObserver.MaxMemoryBytesPerFrame} bytes per frame in total.");
+        }
+
+        IReadOnlySet<ushort> selectedRegisters;
+        if (ppuRegisters is null || ppuRegisters.Length == 0)
+        {
+            selectedRegisters = PpuRegisterTracing.DefaultRegisters;
+        }
+        else
+        {
+            if (ppuRegisters.Length > 8)
+            {
+                return Error("invalid_ppu_registers", "ppuRegisters must contain between 1 and 8 values from $2000-$2007.");
+            }
+
+            var parsedRegisters = new HashSet<ushort>();
+            foreach (var register in ppuRegisters)
+            {
+                var parsed = ParsePpuRegister(register);
+                if (!parsed.IsSuccess)
+                {
+                    return new ToolError(parsed.Error!);
+                }
+
+                parsedRegisters.Add(parsed.Value);
+            }
+
+            selectedRegisters = parsedRegisters;
+        }
+
+        return ToToolResult(session.ObserveExecution(new ExecutionObservationRequest(
+            frameCount,
+            parsedButtons.Value,
+            parsedProbes,
+            includePpuState,
+            tracePpuWrites,
+            maxPpuEvents,
+            selectedRegisters)));
+    }
+
     [McpServerTool(Name = "run_input_timeline", ReadOnly = false, Destructive = false)]
     [Description("Runs a bounded deterministic sequence of complete held-button frame steps atomically.")]
     public static object RunInputTimeline(INesDebugSession session, InputTimelineStep[] steps)

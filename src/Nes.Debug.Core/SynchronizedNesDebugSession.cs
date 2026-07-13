@@ -189,6 +189,11 @@ public sealed class SynchronizedNesDebugSession(INesDebugSession inner) : INesDe
         lock (gate) { return inner.ObserveScreen(frameCount); }
     }
 
+    public DebugResult<ExecutionObservationResult> ObserveExecution(ExecutionObservationRequest request)
+    {
+        lock (gate) { return inner.ObserveExecution(request); }
+    }
+
     public DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps)
     {
         lock (gate) { return inner.RunInputTimeline(steps); }

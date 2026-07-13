@@ -51,6 +51,7 @@ public sealed class McpToolValidationTests
             "trace_ppu_register_writes",
             "read_screen_region",
             "observe_screen",
+            "observe_execution",
             "run_input_timeline",
             "dump_nametables",
             "dump_tilemap",
@@ -331,6 +332,51 @@ public sealed class McpToolValidationTests
     }
 
     [Fact]
+    public void Observe_execution_normalizes_buttons_memory_probes_and_ppu_registers()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.ObserveExecution(
+            session,
+            frameCount: 3,
+            buttons: ["RIGHT", "a", "right"],
+            memoryProbes:
+            [
+                new ExecutionMemoryProbeInput { Address = "$0000", Length = 2 },
+                new ExecutionMemoryProbeInput { Address = "0x07FF", Length = 1 },
+            ],
+            includePpuState: true,
+            tracePpuWrites: true,
+            maxPpuEvents: 25,
+            ppuRegisters: ["PPUCTRL", "$2007", "PPUCTRL"]);
+
+        Assert.IsType<ToolError>(result);
+        Assert.True(session.ObserveExecutionCalled);
+        Assert.NotNull(session.LastExecutionObservationRequest);
+        Assert.Equal(3, session.LastExecutionObservationRequest.FrameCount);
+        Assert.Equal([NesButton.A, NesButton.Right], session.LastExecutionObservationRequest.Buttons);
+        Assert.Equal([new MemoryProbe(0x0000, 2), new MemoryProbe(0x07FF, 1)], session.LastExecutionObservationRequest.MemoryProbes);
+        Assert.True(session.LastExecutionObservationRequest.IncludePpuState);
+        Assert.True(session.LastExecutionObservationRequest.TracePpuWrites);
+        Assert.Equal(25, session.LastExecutionObservationRequest.MaxPpuEvents);
+        Assert.Equal([(ushort)0x2000, (ushort)0x2007], session.LastExecutionObservationRequest.PpuRegisters.Order());
+    }
+
+    [Fact]
+    public void Observe_execution_rejects_memory_probes_outside_cpu_ram_without_calling_session()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.ObserveExecution(
+            session,
+            memoryProbes: [new ExecutionMemoryProbeInput { Address = "$1FFF", Length = 2 }]);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("invalid_memory_probe_range", error.Error.Code);
+        Assert.False(session.ObserveExecutionCalled);
+    }
+
+    [Fact]
     public void Read_screen_region_validates_bounds_before_calling_session()
     {
         var session = new FakeDebugSession();
@@ -572,6 +618,7 @@ public sealed class McpToolValidationTests
         public bool RunUntilConditionCalled { get; private set; }
         public bool TraceUntilWriteRangeCalled { get; private set; }
         public bool TracePpuRegisterWritesCalled { get; private set; }
+        public bool ObserveExecutionCalled { get; private set; }
         public bool ReadScreenRegionCalled { get; private set; }
 
         public string? LastScreenRegionFormat { get; private set; }
@@ -588,6 +635,7 @@ public sealed class McpToolValidationTests
         public IReadOnlyList<NesButton> LastPressedButtons { get; private set; } = [];
         public IReadOnlyList<InputTimelineStep> LastInputTimelineSteps { get; private set; } = [];
         public PpuRegisterTraceRequest? LastPpuRegisterTraceRequest { get; private set; }
+        public ExecutionObservationRequest? LastExecutionObservationRequest { get; private set; }
         public Queue<IReadOnlyList<int>> ScreenFrames { get; } = new();
         public int LastPressFrameCount { get; private set; }
         public ushort LastBreakpointAddress { get; private set; }
@@ -775,6 +823,13 @@ public sealed class McpToolValidationTests
         }
 
         public DebugResult<ScreenObservationResult> ObserveScreen(int frameCount) => ScreenObserver.Observe(this, frameCount);
+
+        public DebugResult<ExecutionObservationResult> ObserveExecution(ExecutionObservationRequest request)
+        {
+            ObserveExecutionCalled = true;
+            LastExecutionObservationRequest = request;
+            return DebugResult<ExecutionObservationResult>.Failure("not_configured", "Fake session result was not configured.");
+        }
 
         public DebugResult<int> CopyPaletteIndexFrame(Memory<byte> destination)
         {

@@ -987,6 +987,149 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
     public DebugResult<ScreenObservationResult> ObserveScreen(int frameCount) =>
         ScreenObserver.Observe(this, frameCount);
 
+    public DebugResult<ExecutionObservationResult> ObserveExecution(ExecutionObservationRequest request)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<ExecutionObservationResult>();
+        }
+
+        if (request.FrameCount is < 1 or > ExecutionObserver.MaxFrames ||
+            request.MemoryProbes.Count > ExecutionObserver.MaxMemoryProbes ||
+            request.MemoryProbes.Any(probe => probe.Length is < 1 or > ExecutionObserver.MaxMemoryProbeLength || probe.Address + probe.Length > 0x2000) ||
+            request.MemoryProbes.Sum(probe => probe.Length) > ExecutionObserver.MaxMemoryBytesPerFrame ||
+            request.MaxPpuEvents is < 1 or > ExecutionObserver.MaxPpuEvents ||
+            request.PpuRegisters.Count is < 1 or > 8 ||
+            request.PpuRegisters.Any(address => address is < 0x2000 or > 0x2007))
+        {
+            return DebugResult<ExecutionObservationResult>.Failure("invalid_execution_observation_request", "Execution observation limits or probe ranges are invalid.");
+        }
+
+        var previous = new byte[ScreenFrameAnalyzer.PixelCount];
+        var current = new byte[ScreenFrameAnalyzer.PixelCount];
+        var initialFrame = ScreenFrameAnalyzer.Capture(this, previous);
+        if (!initialFrame.IsSuccess)
+        {
+            return DebugResult<ExecutionObservationResult>.Failure(initialFrame.Error!.Code, initialFrame.Error.Message);
+        }
+
+        var initialHash = ScreenFrameAnalyzer.Hash(previous);
+        var initialNametables = NametableReader.ReadAll(ReadPpuBytes, includeDetails: false, GetTimeline());
+        var controller = SetController(request.Buttons);
+        if (!controller.IsSuccess)
+        {
+            return DebugResult<ExecutionObservationResult>.Failure(controller.Error!.Code, controller.Error.Message);
+        }
+
+        var startFrame = NesCore.frame_count;
+        var trace = new ActivePpuRegisterTrace(startFrame, request.MaxPpuEvents, request.PpuRegisters);
+        if (request.TracePpuWrites)
+        {
+            activePpuRegisterTrace = trace;
+        }
+
+        var frames = new List<ExecutionFrameObservation>(request.FrameCount);
+        var framesRun = 0;
+        var hitBreakpoint = false;
+        var stopReason = "framesComplete";
+        var released = false;
+
+        try
+        {
+            for (var frameOffset = 1; frameOffset <= request.FrameCount; frameOffset++)
+            {
+                var run = RunFrame(1);
+                if (!run.IsSuccess)
+                {
+                    return DebugResult<ExecutionObservationResult>.Failure(run.Error!.Code, run.Error.Message);
+                }
+
+                framesRun += run.Value.FramesRun;
+                hitBreakpoint = run.Value.HitBreakpoint;
+                if (run.Value.FramesRun == 0)
+                {
+                    stopReason = hitBreakpoint ? "breakpoint" : "stopped";
+                    break;
+                }
+
+                var captured = ScreenFrameAnalyzer.Capture(this, current);
+                if (!captured.IsSuccess)
+                {
+                    return DebugResult<ExecutionObservationResult>.Failure(captured.Error!.Code, captured.Error.Message);
+                }
+
+                var screen = ScreenFrameAnalyzer.Compare(previous, current, frameOffset, run.Value.Timeline.Frames);
+                var memory = request.MemoryProbes
+                    .Select(probe =>
+                    {
+                        var bytes = ReadBytes(probe.Address, probe.Length);
+                        return new MemoryProbeObservation(Hex.FormatWord(probe.Address), probe.Length, Hex.FormatBytes(bytes));
+                    })
+                    .ToArray();
+
+                PpuStateResult? ppuState = null;
+                if (request.IncludePpuState)
+                {
+                    var readPpuState = ReadPpuState();
+                    if (!readPpuState.IsSuccess)
+                    {
+                        return DebugResult<ExecutionObservationResult>.Failure(readPpuState.Error!.Code, readPpuState.Error.Message);
+                    }
+
+                    ppuState = readPpuState.Value;
+                }
+
+                frames.Add(new ExecutionFrameObservation(screen, memory, ppuState));
+                (previous, current) = (current, previous);
+
+                if (hitBreakpoint)
+                {
+                    stopReason = "breakpoint";
+                    break;
+                }
+            }
+
+            var finalNametables = NametableReader.ReadAll(ReadPpuBytes, includeDetails: false, GetTimeline());
+            var release = SetController([]);
+            if (!release.IsSuccess)
+            {
+                return DebugResult<ExecutionObservationResult>.Failure(release.Error!.Code, release.Error.Message);
+            }
+
+            released = true;
+            return DebugResult<ExecutionObservationResult>.Success(new ExecutionObservationResult(
+                request.FrameCount,
+                framesRun,
+                request.Buttons.Select(ButtonName).ToArray(),
+                initialHash,
+                frames,
+                trace.Events,
+                trace.Events.Count,
+                trace.EventsObserved,
+                trace.Truncated,
+                trace.Truncated,
+                initialNametables,
+                finalNametables,
+                hitBreakpoint,
+                stopReason,
+                release.Value,
+                ExecutionObserver.AppliedLimits,
+                GetTimeline()));
+        }
+        catch (Exception ex)
+        {
+            return DebugResult<ExecutionObservationResult>.Failure("observe_execution_failed", ex.Message);
+        }
+        finally
+        {
+            activePpuRegisterTrace = null;
+            if (!released)
+            {
+                _ = SetController([]);
+            }
+        }
+    }
+
     public DebugResult<int> CopyPaletteIndexFrame(Memory<byte> destination)
     {
         if (!romLoaded)

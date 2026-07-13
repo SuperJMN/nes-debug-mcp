@@ -114,6 +114,9 @@ public sealed class AutoNesDebugSession(INesDebugSession adnes, INesDebugSession
 
     public DebugResult<ScreenObservationResult> ObserveScreen(int frameCount) => Active.ObserveScreen(frameCount);
 
+    public DebugResult<ExecutionObservationResult> ObserveExecution(ExecutionObservationRequest request) =>
+        Active.ObserveExecution(request);
+
     public DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps) =>
         Active.RunInputTimeline(steps);
 
