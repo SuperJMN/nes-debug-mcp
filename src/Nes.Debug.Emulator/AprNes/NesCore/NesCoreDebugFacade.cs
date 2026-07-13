@@ -26,8 +26,10 @@ public readonly record struct NesCoreDebugPpuState(
     byte PpuMask,
     byte PpuStatus,
     byte OamAddr,
-    ushort PpuAddr,
-    ushort PpuScroll,
+    ushort V,
+    ushort T,
+    byte FineX,
+    bool WriteToggle,
     int Scanline,
     int Cycle,
     bool Nmi,
@@ -191,29 +193,26 @@ unsafe public partial class NesCore
 
     public static NesCoreDebugPpuState DebugReadPpuState()
     {
-        var mask = (byte)(
-            (ShowBackGround ? 0x08 : 0) |
-            (ShowSprites ? 0x10 : 0));
         var status = (byte)(
             (isVblank ? 0x80 : 0) |
             (isSprite0hit ? 0x40 : 0) |
             (isSpriteOverflow ? 0x20 : 0));
 
         return new NesCoreDebugPpuState(
-            (byte)(
-                (NMIable ? 0x80 : 0) |
-                (Spritesize8x16 ? 0x20 : 0)),
-            mask,
+            ppuCtrlRegister,
+            ppuMaskRegister,
             status,
             spr_ram_add,
             (ushort)vram_addr,
             (ushort)vram_addr_internal,
+            (byte)FineX,
+            vram_latch,
             scanline,
             ppu_cycles_x,
             NMILine,
-            ShowBackGround || ShowSprites,
-            ShowSprites,
-            ShowBackGround,
+            (ppuMaskRegister & 0x18) != 0,
+            (ppuMaskRegister & 0x10) != 0,
+            (ppuMaskRegister & 0x08) != 0,
             debugCpuCycles * 3);
     }
 

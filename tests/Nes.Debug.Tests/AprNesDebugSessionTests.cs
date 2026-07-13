@@ -299,6 +299,87 @@ public sealed class AprNesDebugSessionTests
         Assert.Equal(4, dump.Value.Nametables.Select(table => table.Hash).Distinct().Count());
     }
 
+    [Fact]
+    public void Read_ppu_state_reports_complete_ppuctrl_ppumask_status_and_timeline()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0xFF,       // LDA #$FF
+            0x8D, 0x00, 0x20, // STA $2000
+            0xA9, 0xFF,       // LDA #$FF
+            0x8D, 0x01, 0x20, // STA $2001
+            0xA9, 0x7E,       // LDA #$7E
+            0x8D, 0x03, 0x20, // STA $2003
+            0x4C, 0x0F, 0x80, // JMP $800F
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var step = session.StepInstruction(7);
+        var ppu = session.ReadPpuState();
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(step.IsSuccess, step.Error?.Message);
+        Assert.True(ppu.IsSuccess, ppu.Error?.Message);
+        Assert.Equal("0xFF", ppu.Value.PpuCtrl);
+        Assert.Equal("0xFF", ppu.Value.PpuMask);
+        Assert.Equal("0x84", ppu.Value.OamAddr);
+        Assert.Null(ppu.Value.PpuScroll);
+        Assert.Equal(3, ppu.Value.Control.NametableSelect);
+        Assert.Equal("0x2C00", ppu.Value.Control.NametableAddress);
+        Assert.Equal(32, ppu.Value.Control.VramIncrement);
+        Assert.Equal("0x1000", ppu.Value.Control.SpritePatternTableAddress);
+        Assert.Equal("0x1000", ppu.Value.Control.BackgroundPatternTableAddress);
+        Assert.Equal("8x16", ppu.Value.Control.SpriteSize);
+        Assert.True(ppu.Value.Control.NmiEnabled);
+        Assert.True(ppu.Value.Mask.Greyscale);
+        Assert.True(ppu.Value.Mask.BackgroundLeftEdgeEnabled);
+        Assert.True(ppu.Value.Mask.SpriteLeftEdgeEnabled);
+        Assert.True(ppu.Value.Mask.BackgroundEnabled);
+        Assert.True(ppu.Value.Mask.SpritesEnabled);
+        Assert.True(ppu.Value.Mask.EmphasizeRed);
+        Assert.True(ppu.Value.Mask.EmphasizeGreen);
+        Assert.True(ppu.Value.Mask.EmphasizeBlue);
+        Assert.Equal(ppu.Value.Status.VBlank, ppu.Value.VBlank);
+        Assert.Equal(step.Value.Timeline, ppu.Value.Timeline);
+        Assert.Equal(ppu.Value.PpuAddr, ppu.Value.V);
+    }
+
+    [Fact]
+    public void Read_ppu_state_exposes_authoritative_v_t_x_w_during_scroll_sequence()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x01,       // LDA #$01
+            0x8D, 0x00, 0x20, // STA $2000: t nametable = 1
+            0xA9, 0x2D,       // LDA #$2D
+            0x8D, 0x05, 0x20, // STA $2005: coarse X = 5, fine X = 5, w = 1
+            0xA9, 0x9A,       // LDA #$9A
+            0x8D, 0x05, 0x20, // STA $2005: fine Y = 2, coarse Y = 19, w = 0
+            0x4C, 0x0F, 0x80, // JMP $800F
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var firstScroll = session.StepInstruction(4);
+        var afterFirst = session.ReadPpuState();
+        var secondScroll = session.StepInstruction(2);
+        var afterSecond = session.ReadPpuState();
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(firstScroll.IsSuccess, firstScroll.Error?.Message);
+        Assert.True(afterFirst.IsSuccess, afterFirst.Error?.Message);
+        Assert.Equal("0x0000", afterFirst.Value.V);
+        Assert.Equal("0x0405", afterFirst.Value.T);
+        Assert.Equal(5, afterFirst.Value.X);
+        Assert.True(afterFirst.Value.W);
+        Assert.True(secondScroll.IsSuccess, secondScroll.Error?.Message);
+        Assert.True(afterSecond.IsSuccess, afterSecond.Error?.Message);
+        Assert.Equal("0x2665", afterSecond.Value.T);
+        Assert.Equal(5, afterSecond.Value.X);
+        Assert.False(afterSecond.Value.W);
+    }
+
     private static byte[] CreateMinimalMmc3()
     {
         return CreateProgramMmc3([0xA9, 0x42, 0xEA, 0x4C, 0x02, 0x80]);

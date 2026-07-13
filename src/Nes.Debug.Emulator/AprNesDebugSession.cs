@@ -681,20 +681,20 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
         }
 
         var state = NesCore.DebugReadPpuState();
-        return DebugResult<PpuStateResult>.Success(new PpuStateResult(
-            Hex.FormatByte(state.PpuCtrl),
-            Hex.FormatByte(state.PpuMask),
-            Hex.FormatByte(state.PpuStatus),
-            Hex.FormatByte(state.OamAddr),
-            Hex.FormatWord(state.PpuAddr),
-            Hex.FormatWord(state.PpuScroll),
+        return DebugResult<PpuStateResult>.Success(PpuStateBuilder.Build(
+            state.PpuCtrl,
+            state.PpuMask,
+            state.PpuStatus,
+            state.OamAddr,
+            state.V,
+            state.T,
+            state.FineX,
+            state.WriteToggle,
             state.Scanline,
             state.Cycle,
             state.Nmi,
-            state.RenderingEnabled,
-            state.SpritesEnabled,
-            state.BackgroundEnabled,
-            (long)Math.Min(state.PpuCycles, long.MaxValue)));
+            (long)Math.Min(state.PpuCycles, long.MaxValue),
+            GetTimeline()));
     }
 
     public DebugResult<ScreenCaptureResult> CaptureScreen()

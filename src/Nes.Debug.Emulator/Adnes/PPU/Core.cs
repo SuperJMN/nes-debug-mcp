@@ -107,6 +107,10 @@ namespace ADNES.PPU
 
         public int RegisterPpuScroll => _registerPPUSCROLL;
 
+        public byte FineX => _X;
+
+        public bool WriteToggle => _writeOrderToggle != 0;
+
         public int CurrentCycle => _currentCycle;
 
         public int CurrentScanline => _currentScanline;

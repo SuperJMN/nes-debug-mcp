@@ -835,21 +835,20 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IPaletteIndexFram
             return NoRom<PpuStateResult>();
         }
 
-        var mask = Ppu.RegisterPpuMask;
-        return DebugResult<PpuStateResult>.Success(new PpuStateResult(
-            Hex.FormatByte(Ppu.RegisterPpuCtrl),
-            Hex.FormatByte(mask),
-            Hex.FormatByte(Ppu.RegisterPpuStatus),
-            Hex.FormatByte(Ppu.RegisterOamAddr),
-            Hex.FormatWord((ushort)Ppu.RegisterPpuAddr),
-            Hex.FormatWord((ushort)Ppu.RegisterPpuScroll),
+        return DebugResult<PpuStateResult>.Success(PpuStateBuilder.Build(
+            Ppu.RegisterPpuCtrl,
+            Ppu.RegisterPpuMask,
+            Ppu.RegisterPpuStatus,
+            Ppu.RegisterOamAddr,
+            (ushort)Ppu.RegisterPpuAddr,
+            (ushort)Ppu.RegisterPpuScroll,
+            Ppu.FineX,
+            Ppu.WriteToggle,
             Ppu.CurrentScanline,
             Ppu.CurrentCycle,
             Ppu.NMI,
-            (mask & 0x18) != 0,
-            (mask & 0x10) != 0,
-            (mask & 0x08) != 0,
-            Ppu.Cycles));
+            Ppu.Cycles,
+            GetTimeline()));
     }
 
     public DebugResult<ScreenCaptureResult> CaptureScreen()

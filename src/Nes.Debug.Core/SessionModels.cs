@@ -213,14 +213,69 @@ public sealed record PpuStateResult(
     [property: JsonPropertyName("ppustatus")] string PpuStatus,
     [property: JsonPropertyName("oamaddr")] string OamAddr,
     [property: JsonPropertyName("ppuaddr")] string PpuAddr,
-    [property: JsonPropertyName("ppuscroll")] string PpuScroll,
+    [property: JsonPropertyName("ppuscroll")] string? PpuScroll,
     [property: JsonPropertyName("scanline")] int Scanline,
     [property: JsonPropertyName("cycle")] int Cycle,
     [property: JsonPropertyName("nmi")] bool Nmi,
     [property: JsonPropertyName("renderingEnabled")] bool RenderingEnabled,
     [property: JsonPropertyName("spritesEnabled")] bool SpritesEnabled,
     [property: JsonPropertyName("backgroundEnabled")] bool BackgroundEnabled,
-    [property: JsonPropertyName("ppuCycles")] long PpuCycles);
+    [property: JsonPropertyName("ppuCycles")] long PpuCycles)
+{
+    [JsonPropertyName("v")]
+    public string V { get; init; } = "0x0000";
+
+    [JsonPropertyName("t")]
+    public string T { get; init; } = "0x0000";
+
+    [JsonPropertyName("x")]
+    public int X { get; init; }
+
+    [JsonPropertyName("w")]
+    public bool W { get; init; }
+
+    [JsonPropertyName("vblank")]
+    public bool VBlank { get; init; }
+
+    [JsonPropertyName("renderingActive")]
+    public bool RenderingActive { get; init; }
+
+    [JsonPropertyName("control")]
+    public PpuControlState Control { get; init; } = new(0, "0x2000", 1, "0x0000", "0x0000", "8x8", false);
+
+    [JsonPropertyName("mask")]
+    public PpuMaskState Mask { get; init; } = new(false, false, false, false, false, false, false, false);
+
+    [JsonPropertyName("status")]
+    public PpuStatusState Status { get; init; } = new(false, false, false);
+
+    [JsonPropertyName("timeline")]
+    public TimelineCounters Timeline { get; init; } = new(0, 0);
+}
+
+public sealed record PpuControlState(
+    [property: JsonPropertyName("nametableSelect")] int NametableSelect,
+    [property: JsonPropertyName("nametableAddress")] string NametableAddress,
+    [property: JsonPropertyName("vramIncrement")] int VramIncrement,
+    [property: JsonPropertyName("spritePatternTableAddress")] string SpritePatternTableAddress,
+    [property: JsonPropertyName("backgroundPatternTableAddress")] string BackgroundPatternTableAddress,
+    [property: JsonPropertyName("spriteSize")] string SpriteSize,
+    [property: JsonPropertyName("nmiEnabled")] bool NmiEnabled);
+
+public sealed record PpuMaskState(
+    [property: JsonPropertyName("greyscale")] bool Greyscale,
+    [property: JsonPropertyName("backgroundLeftEdgeEnabled")] bool BackgroundLeftEdgeEnabled,
+    [property: JsonPropertyName("spriteLeftEdgeEnabled")] bool SpriteLeftEdgeEnabled,
+    [property: JsonPropertyName("backgroundEnabled")] bool BackgroundEnabled,
+    [property: JsonPropertyName("spritesEnabled")] bool SpritesEnabled,
+    [property: JsonPropertyName("emphasizeRed")] bool EmphasizeRed,
+    [property: JsonPropertyName("emphasizeGreen")] bool EmphasizeGreen,
+    [property: JsonPropertyName("emphasizeBlue")] bool EmphasizeBlue);
+
+public sealed record PpuStatusState(
+    [property: JsonPropertyName("spriteOverflow")] bool SpriteOverflow,
+    [property: JsonPropertyName("spriteZeroHit")] bool SpriteZeroHit,
+    [property: JsonPropertyName("vblank")] bool VBlank);
 
 public sealed record LastWriterResult(
     [property: JsonPropertyName("found")] bool Found,
