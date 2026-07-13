@@ -174,6 +174,11 @@ public sealed class SynchronizedNesDebugSession(INesDebugSession inner) : INesDe
         lock (gate) { return inner.TraceUntilWriteRange(address, length, maxInstructions); }
     }
 
+    public DebugResult<PpuRegisterTraceResult> TracePpuRegisterWrites(PpuRegisterTraceRequest request)
+    {
+        lock (gate) { return inner.TracePpuRegisterWrites(request); }
+    }
+
     public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format)
     {
         lock (gate) { return inner.ReadScreenRegion(x, y, width, height, format); }

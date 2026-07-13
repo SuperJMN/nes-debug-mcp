@@ -70,6 +70,8 @@ public interface INesDebugSession
 
     DebugResult<TraceUntilWriteRangeResult> TraceUntilWriteRange(ushort address, int length, int maxInstructions);
 
+    DebugResult<PpuRegisterTraceResult> TracePpuRegisterWrites(PpuRegisterTraceRequest request);
+
     DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format);
 
     DebugResult<ScreenObservationResult> ObserveScreen(int frameCount);

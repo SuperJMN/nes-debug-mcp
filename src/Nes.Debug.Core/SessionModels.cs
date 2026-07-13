@@ -317,6 +317,47 @@ public sealed record TraceUntilWriteRangeResult(
     [property: JsonPropertyName("disassembly")] DisassembleResult Disassembly,
     [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
 
+public sealed record PpuRegisterTraceRequest(
+    int FrameCount,
+    int MaxEvents,
+    IReadOnlySet<ushort> Registers,
+    IReadOnlyList<NesButton> Buttons);
+
+public sealed record PpuRegisterTraceResult(
+    [property: JsonPropertyName("framesRequested")] int FramesRequested,
+    [property: JsonPropertyName("framesRun")] int FramesRun,
+    [property: JsonPropertyName("initialPpuState")] PpuStateResult InitialPpuState,
+    [property: JsonPropertyName("finalPpuState")] PpuStateResult FinalPpuState,
+    [property: JsonPropertyName("events")] IReadOnlyList<PpuRegisterWriteEvent> Events,
+    [property: JsonPropertyName("eventCount")] int EventCount,
+    [property: JsonPropertyName("eventsObserved")] int EventsObserved,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("hitBreakpoint")] bool HitBreakpoint,
+    [property: JsonPropertyName("stopReason")] string StopReason,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record PpuRegisterWriteEvent(
+    [property: JsonPropertyName("frameOffset")] int FrameOffset,
+    [property: JsonPropertyName("frame")] ulong Frame,
+    [property: JsonPropertyName("cpuCycle")] ulong CpuCycle,
+    [property: JsonPropertyName("instructionCounter")] ulong InstructionCounter,
+    [property: JsonPropertyName("pc")] string Pc,
+    [property: JsonPropertyName("address")] string Address,
+    [property: JsonPropertyName("register")] string Register,
+    [property: JsonPropertyName("value")] string Value,
+    [property: JsonPropertyName("before")] PpuRegisterSnapshot Before,
+    [property: JsonPropertyName("after")] PpuRegisterSnapshot After);
+
+public sealed record PpuRegisterSnapshot(
+    [property: JsonPropertyName("scanline")] int Scanline,
+    [property: JsonPropertyName("dot")] int Dot,
+    [property: JsonPropertyName("vblank")] bool VBlank,
+    [property: JsonPropertyName("renderingActive")] bool RenderingActive,
+    [property: JsonPropertyName("v")] string V,
+    [property: JsonPropertyName("t")] string T,
+    [property: JsonPropertyName("x")] int X,
+    [property: JsonPropertyName("w")] bool W);
+
 public sealed record RunUntilConditionResult(
     [property: JsonPropertyName("stopped")] bool Stopped,
     [property: JsonPropertyName("reason")] string Reason,

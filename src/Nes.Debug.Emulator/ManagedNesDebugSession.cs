@@ -1000,6 +1000,11 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IPaletteIndexFram
             GetTimeline()));
     }
 
+    public DebugResult<PpuRegisterTraceResult> TracePpuRegisterWrites(PpuRegisterTraceRequest request) =>
+        DebugResult<PpuRegisterTraceResult>.Failure(
+            "ppu_register_trace_not_supported",
+            "Continuous PPU register tracing requires the AprNes backend.");
+
     public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format)
     {
         if (!romLoaded)

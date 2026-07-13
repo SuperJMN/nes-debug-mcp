@@ -489,6 +489,62 @@ public static class NesDebugTools
             : new ToolError(range.Error!);
     }
 
+    [McpServerTool(Name = "trace_ppu_register_writes", ReadOnly = false, Destructive = false)]
+    [Description("Atomically runs bounded AprNes frames and records every selected CPU write to $2000-$2007 with exact pre/post PPU register snapshots.")]
+    public static object TracePpuRegisterWrites(
+        INesDebugSession session,
+        int frameCount = 1,
+        int maxEvents = 1000,
+        string[]? registers = null,
+        string[]? buttons = null)
+    {
+        if (frameCount is < 1 or > PpuRegisterTracing.MaxFrames)
+        {
+            return Error("invalid_frame_count", $"frameCount must be between 1 and {PpuRegisterTracing.MaxFrames}.");
+        }
+
+        if (maxEvents is < 1 or > PpuRegisterTracing.MaxEvents)
+        {
+            return Error("invalid_max_events", $"maxEvents must be between 1 and {PpuRegisterTracing.MaxEvents}.");
+        }
+
+        IReadOnlySet<ushort> selectedRegisters;
+        if (registers is null || registers.Length == 0)
+        {
+            selectedRegisters = PpuRegisterTracing.DefaultRegisters;
+        }
+        else
+        {
+            if (registers.Length > 8)
+            {
+                return Error("invalid_ppu_registers", "registers must contain between 1 and 8 values from $2000-$2007.");
+            }
+
+            var parsedRegisters = new HashSet<ushort>();
+            foreach (var register in registers)
+            {
+                var parsed = ParsePpuRegister(register);
+                if (!parsed.IsSuccess)
+                {
+                    return new ToolError(parsed.Error!);
+                }
+
+                parsedRegisters.Add(parsed.Value);
+            }
+
+            selectedRegisters = parsedRegisters;
+        }
+
+        var parsedButtons = ParseButtons(buttons ?? []);
+        if (!parsedButtons.IsSuccess)
+        {
+            return new ToolError(parsedButtons.Error!);
+        }
+
+        return ToToolResult(session.TracePpuRegisterWrites(
+            new PpuRegisterTraceRequest(frameCount, maxEvents, selectedRegisters, parsedButtons.Value)));
+    }
+
     [McpServerTool(Name = "read_screen_region", ReadOnly = true, Destructive = false)]
     [Description("Reads deterministic palette-index data from a bounded screen region. Use palette_indices_raw to request every value, including a full 256x240 frame.")]
     public static object ReadScreenRegion(INesDebugSession session, int x, int y, int width, int height, string format = "palette_indices")
@@ -641,6 +697,40 @@ public static class NesDebugTools
     }
 
     private static DebugResult<NesAddress> ParseAddress(string address) => NesAddress.Parse(address);
+
+    private static DebugResult<ushort> ParsePpuRegister(string register)
+    {
+        if (string.IsNullOrWhiteSpace(register))
+        {
+            return DebugResult<ushort>.Failure("invalid_ppu_register", "PPU register is required.");
+        }
+
+        var normalized = register.Trim().ToUpperInvariant();
+        var namedAddress = normalized switch
+        {
+            "PPUCTRL" => (ushort?)0x2000,
+            "PPUMASK" => (ushort?)0x2001,
+            "PPUSTATUS" => (ushort?)0x2002,
+            "OAMADDR" => (ushort?)0x2003,
+            "OAMDATA" => (ushort?)0x2004,
+            "PPUSCROLL" => (ushort?)0x2005,
+            "PPUADDR" => (ushort?)0x2006,
+            "PPUDATA" => (ushort?)0x2007,
+            _ => null,
+        };
+        if (namedAddress.HasValue)
+        {
+            return DebugResult<ushort>.Success(namedAddress.Value);
+        }
+
+        var parsed = NesAddress.Parse(register);
+        if (!parsed.IsSuccess || parsed.Value.Address is < 0x2000 or > 0x2007)
+        {
+            return DebugResult<ushort>.Failure("invalid_ppu_register", "registers must contain names or addresses from $2000-$2007.");
+        }
+
+        return DebugResult<ushort>.Success(parsed.Value.Address);
+    }
 
     private static DebugResult<WatchpointMode> ParseWatchpointMode(string mode)
     {

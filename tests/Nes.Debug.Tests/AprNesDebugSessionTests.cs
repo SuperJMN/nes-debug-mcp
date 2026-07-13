@@ -380,6 +380,134 @@ public sealed class AprNesDebugSessionTests
         Assert.False(afterSecond.Value.W);
     }
 
+    [Fact]
+    public void Trace_ppu_register_writes_preserves_exact_order_and_authoritative_snapshots()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x81,       // $8000: LDA #$81
+            0x8D, 0x00, 0x20, // $8002: STA $2000
+            0xA9, 0x2D,       // $8005: LDA #$2D
+            0x8D, 0x05, 0x20, // $8007: STA $2005
+            0xA9, 0x9A,       // $800A: LDA #$9A
+            0x8D, 0x05, 0x20, // $800C: STA $2005
+            0xA9, 0x3F,       // $800F: LDA #$3F
+            0x8D, 0x06, 0x20, // $8011: STA $2006
+            0xA9, 0x20,       // $8014: LDA #$20
+            0x8D, 0x06, 0x20, // $8016: STA $2006
+            0xA9, 0x55,       // $8019: LDA #$55
+            0x8D, 0x07, 0x20, // $801B: STA $2007
+            0x4C, 0x1E, 0x80, // $801E: JMP $801E
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var breakpoint = session.SetBreakpoint(0x801E, null);
+        var trace = session.TracePpuRegisterWrites(new PpuRegisterTraceRequest(
+            1,
+            100,
+            PpuRegisterTracing.DefaultRegisters,
+            []));
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(breakpoint.IsSuccess, breakpoint.Error?.Message);
+        Assert.True(trace.IsSuccess, trace.Error?.Message);
+        Assert.Equal(1, trace.Value.FramesRequested);
+        Assert.Equal(0, trace.Value.FramesRun);
+        Assert.True(trace.Value.HitBreakpoint);
+        Assert.False(trace.Value.Truncated);
+        Assert.Equal(6, trace.Value.EventCount);
+        Assert.Equal(
+            ["0x2000", "0x2005", "0x2005", "0x2006", "0x2006", "0x2007"],
+            trace.Value.Events.Select(evt => evt.Address));
+        Assert.Equal(
+            ["0x81", "0x2D", "0x9A", "0x3F", "0x20", "0x55"],
+            trace.Value.Events.Select(evt => evt.Value));
+        Assert.Equal(
+            ["0x8002", "0x8007", "0x800C", "0x8011", "0x8016", "0x801B"],
+            trace.Value.Events.Select(evt => evt.Pc));
+        Assert.True(trace.Value.Events.Zip(trace.Value.Events.Skip(1)).All(pair => pair.First.CpuCycle < pair.Second.CpuCycle));
+        Assert.True(trace.Value.Events.Zip(trace.Value.Events.Skip(1)).All(pair => pair.First.InstructionCounter < pair.Second.InstructionCounter));
+        Assert.All(trace.Value.Events, evt =>
+        {
+            Assert.InRange(evt.Before.Scanline, 0, 261);
+            Assert.InRange(evt.Before.Dot, 0, 340);
+        });
+        Assert.Equal("0x0405", trace.Value.Events[2].Before.T);
+        Assert.Equal(5, trace.Value.Events[2].Before.X);
+        Assert.True(trace.Value.Events[2].Before.W);
+        Assert.Equal("0x2665", trace.Value.Events[3].Before.T);
+        Assert.False(trace.Value.Events[3].Before.W);
+        Assert.Equal("0x3F65", trace.Value.Events[3].After.T);
+        Assert.True(trace.Value.Events[3].After.W);
+        Assert.Equal("0x3F20", trace.Value.Events[4].After.T);
+        Assert.False(trace.Value.Events[4].After.W);
+        Assert.Equal(trace.Value.Timeline, trace.Value.FinalPpuState.Timeline);
+    }
+
+    [Fact]
+    public void Trace_ppu_register_writes_captures_vblank_and_reports_truncation_without_stopping_execution()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x01,       // $8000: LDA #$01
+            0x8D, 0x00, 0x20, // $8002: STA $2000
+            0x4C, 0x02, 0x80, // $8005: JMP $8002
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var full = session.TracePpuRegisterWrites(new PpuRegisterTraceRequest(
+            2,
+            PpuRegisterTracing.MaxEvents,
+            new HashSet<ushort> { 0x2000 },
+            []));
+        var limitedStartFrame = full.Value.Timeline.Frames;
+        var limited = session.TracePpuRegisterWrites(new PpuRegisterTraceRequest(
+            1,
+            3,
+            new HashSet<ushort> { 0x2000 },
+            []));
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(full.IsSuccess, full.Error?.Message);
+        Assert.Equal(2, full.Value.FramesRun);
+        Assert.False(full.Value.Truncated);
+        Assert.Equal(full.Value.EventCount, full.Value.EventsObserved);
+        Assert.Contains(full.Value.Events, evt => !evt.Before.VBlank);
+        Assert.Contains(full.Value.Events, evt => evt.Before.VBlank);
+        Assert.True(full.Value.Events.Zip(full.Value.Events.Skip(1)).All(pair => pair.First.CpuCycle < pair.Second.CpuCycle));
+        Assert.True(limited.IsSuccess, limited.Error?.Message);
+        Assert.Equal(1, limited.Value.FramesRun);
+        Assert.Equal(3, limited.Value.EventCount);
+        Assert.True(limited.Value.EventsObserved > limited.Value.EventCount);
+        Assert.True(limited.Value.Truncated);
+        Assert.Equal(limitedStartFrame + 1, limited.Value.Timeline.Frames);
+    }
+
+    [Fact]
+    public void Run_frame_updates_instruction_timeline_and_observe_screen_honors_breakpoints()
+    {
+        using var temp = new TempRom(CreateMinimalMmc3());
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var run = session.RunFrame(1);
+        var registers = session.ReadRegisters();
+        var breakpoint = session.SetBreakpoint(Convert.ToUInt16(registers.Value.Pc[2..], 16), null);
+        var observation = session.ObserveScreen(1);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(run.IsSuccess, run.Error?.Message);
+        Assert.True(run.Value.Timeline.Instructions > 0);
+        Assert.True(registers.IsSuccess, registers.Error?.Message);
+        Assert.True(breakpoint.IsSuccess, breakpoint.Error?.Message);
+        Assert.True(observation.IsSuccess, observation.Error?.Message);
+        Assert.True(observation.Value.HitBreakpoint);
+        Assert.Equal(0, observation.Value.FramesRun);
+        Assert.Empty(observation.Value.Samples);
+    }
+
     private static byte[] CreateMinimalMmc3()
     {
         return CreateProgramMmc3([0xA9, 0x42, 0xEA, 0x4C, 0x02, 0x80]);

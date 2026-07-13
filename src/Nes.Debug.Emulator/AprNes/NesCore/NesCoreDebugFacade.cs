@@ -38,6 +38,25 @@ public readonly record struct NesCoreDebugPpuState(
     bool BackgroundEnabled,
     ulong PpuCycles);
 
+public readonly record struct NesCoreDebugPpuRegisterSnapshot(
+    int Frame,
+    int Scanline,
+    int Dot,
+    bool VBlank,
+    bool RenderingActive,
+    ushort V,
+    ushort T,
+    byte X,
+    bool W);
+
+public readonly record struct NesCoreDebugPpuRegisterWrite(
+    ushort Address,
+    byte Value,
+    ushort Pc,
+    ulong CpuCycle,
+    NesCoreDebugPpuRegisterSnapshot Before,
+    NesCoreDebugPpuRegisterSnapshot After);
+
 unsafe public partial class NesCore
 {
     private const int DebugScreenWidth = 256;
@@ -51,6 +70,7 @@ unsafe public partial class NesCore
     private static ushort debugCurrentInstructionPc;
     private static Action<ushort, byte, ushort>? debugWriteObserver;
     private static Action<ushort, ushort>? debugReadObserver;
+    private static Action<NesCoreDebugPpuRegisterWrite>? debugPpuRegisterWriteObserver;
 
     public static bool DebugLoad(byte[] romBytes)
     {
@@ -62,6 +82,7 @@ unsafe public partial class NesCore
         debugTimingInitialized = false;
         debugCurrentInstructionPc = 0;
         DebugSetMemoryObservers(null, null);
+        DebugSetPpuRegisterWriteObserver(null);
 
         if (!init(romBytes))
         {
@@ -133,6 +154,41 @@ unsafe public partial class NesCore
     {
         debugWriteObserver = writeObserver;
         debugReadObserver = readObserver;
+    }
+
+    public static void DebugSetPpuRegisterWriteObserver(Action<NesCoreDebugPpuRegisterWrite>? observer) =>
+        debugPpuRegisterWriteObserver = observer;
+
+    private static NesCoreDebugPpuRegisterSnapshot DebugReadPpuRegisterSnapshot()
+    {
+        var renderingEnabled = ShowBackGround_Instant || ShowSprites_Instant;
+        return new NesCoreDebugPpuRegisterSnapshot(
+            frame_count,
+            scanline,
+            ppu_cycles_x,
+            isVblank,
+            renderingEnabled && (scanline is >= 0 and < 240 || scanline == preRenderLine),
+            (ushort)vram_addr,
+            (ushort)vram_addr_internal,
+            (byte)FineX,
+            vram_latch);
+    }
+
+    private static void DebugObservePpuRegisterWrite(
+        ushort address,
+        byte value,
+        ushort pc,
+        ulong cpuCycle,
+        NesCoreDebugPpuRegisterSnapshot before)
+    {
+        debugPpuRegisterWriteObserver?.Invoke(
+            new NesCoreDebugPpuRegisterWrite(
+                address,
+                value,
+                pc,
+                cpuCycle,
+                before,
+                DebugReadPpuRegisterSnapshot()));
     }
 
     public static byte DebugReadPpu(ushort address) => PpuBusRead(address);

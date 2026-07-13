@@ -48,6 +48,7 @@ public sealed class McpToolValidationTests
             "find_last_writers",
             "trace_until_write",
             "trace_until_write_range",
+            "trace_ppu_register_writes",
             "read_screen_region",
             "observe_screen",
             "run_input_timeline",
@@ -292,6 +293,44 @@ public sealed class McpToolValidationTests
     }
 
     [Fact]
+    public void Trace_ppu_register_writes_normalizes_registers_and_controller_input()
+    {
+        var ppu = EmptyPpuState();
+        var session = new FakeDebugSession
+        {
+            PpuRegisterTraceResult = DebugResult<PpuRegisterTraceResult>.Success(
+                new PpuRegisterTraceResult(2, 0, ppu, ppu, [], 0, 0, false, true, "breakpoint", new TimelineCounters(0, 0))),
+        };
+
+        var result = NesDebugTools.TracePpuRegisterWrites(
+            session,
+            2,
+            25,
+            ["PPUCTRL", "$2007"],
+            ["right", "a"]);
+
+        Assert.IsType<PpuRegisterTraceResult>(result);
+        Assert.True(session.TracePpuRegisterWritesCalled);
+        Assert.NotNull(session.LastPpuRegisterTraceRequest);
+        Assert.Equal(2, session.LastPpuRegisterTraceRequest.FrameCount);
+        Assert.Equal(25, session.LastPpuRegisterTraceRequest.MaxEvents);
+        Assert.Equal([(ushort)0x2000, (ushort)0x2007], session.LastPpuRegisterTraceRequest.Registers.Order());
+        Assert.Equal([NesButton.A, NesButton.Right], session.LastPpuRegisterTraceRequest.Buttons);
+    }
+
+    [Fact]
+    public void Trace_ppu_register_writes_rejects_registers_outside_the_ppu_range()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.TracePpuRegisterWrites(session, registers: ["$4014"]);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("invalid_ppu_register", error.Error.Code);
+        Assert.False(session.TracePpuRegisterWritesCalled);
+    }
+
+    [Fact]
     public void Read_screen_region_validates_bounds_before_calling_session()
     {
         var session = new FakeDebugSession();
@@ -532,6 +571,7 @@ public sealed class McpToolValidationTests
         public bool SetWatchpointRangeCalled { get; private set; }
         public bool RunUntilConditionCalled { get; private set; }
         public bool TraceUntilWriteRangeCalled { get; private set; }
+        public bool TracePpuRegisterWritesCalled { get; private set; }
         public bool ReadScreenRegionCalled { get; private set; }
 
         public string? LastScreenRegionFormat { get; private set; }
@@ -547,6 +587,7 @@ public sealed class McpToolValidationTests
         public IReadOnlyList<NesButton> LastButtons { get; private set; } = [];
         public IReadOnlyList<NesButton> LastPressedButtons { get; private set; } = [];
         public IReadOnlyList<InputTimelineStep> LastInputTimelineSteps { get; private set; } = [];
+        public PpuRegisterTraceRequest? LastPpuRegisterTraceRequest { get; private set; }
         public Queue<IReadOnlyList<int>> ScreenFrames { get; } = new();
         public int LastPressFrameCount { get; private set; }
         public ushort LastBreakpointAddress { get; private set; }
@@ -576,6 +617,8 @@ public sealed class McpToolValidationTests
             DebugResult<NesCpuRegisters>.Failure("not_configured", "Fake session result was not configured.");
         public DebugResult<PpuStateResult> ReadPpuStateResult { get; init; } =
             DebugResult<PpuStateResult>.Failure("not_configured", "Fake session result was not configured.");
+        public DebugResult<PpuRegisterTraceResult> PpuRegisterTraceResult { get; init; } =
+            DebugResult<PpuRegisterTraceResult>.Failure("not_configured", "Fake session result was not configured.");
 
         public DebugResult<LoadRomResult> LoadRom(string path) => throw new NotSupportedException();
 
@@ -713,6 +756,13 @@ public sealed class McpToolValidationTests
         {
             TraceUntilWriteRangeCalled = true;
             throw new NotSupportedException();
+        }
+
+        public DebugResult<PpuRegisterTraceResult> TracePpuRegisterWrites(PpuRegisterTraceRequest request)
+        {
+            TracePpuRegisterWritesCalled = true;
+            LastPpuRegisterTraceRequest = request;
+            return PpuRegisterTraceResult;
         }
 
         public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format)

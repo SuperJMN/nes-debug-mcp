@@ -74,6 +74,7 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
     private ushort traceHitAddress;
     private ushort traceHitPc;
     private byte traceHitValue;
+    private ActivePpuRegisterTrace? activePpuRegisterTrace;
 
     public DebugResult<LoadRomResult> LoadRom(string path)
     {
@@ -244,14 +245,47 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
 
         try
         {
-            var framesRun = 0;
-            for (var i = 0; i < count; i++)
+            var startFrame = NesCore.frame_count;
+            var instructionLimit = (long)count * PpuRegisterTracing.MaxInstructionsPerFrame;
+            long instructionsRun = 0;
+            while (NesCore.frame_count - startFrame < count)
             {
-                framesRun += NesCore.DebugRunFrame();
+                if (instructionsRun >= instructionLimit)
+                {
+                    return DebugResult<RunFrameResult>.Failure(
+                        "run_frame_instruction_limit",
+                        $"Frame execution exceeded {PpuRegisterTracing.MaxInstructionsPerFrame} instructions per requested frame.");
+                }
+
+                var registers = ToRegisters(NesCore.DebugReadRegisters());
+                var breakpoint = IsBreakpointHit(ParseWord(registers.Pc), registers);
+                if (!breakpoint.IsSuccess)
+                {
+                    return DebugResult<RunFrameResult>.Failure(breakpoint.Error!.Code, breakpoint.Error.Message);
+                }
+
+                if (breakpoint.Value)
+                {
+                    return DebugResult<RunFrameResult>.Success(
+                        new RunFrameResult(
+                            Math.Max(0, NesCore.frame_count - startFrame),
+                            NesCore.frame_count,
+                            registers,
+                            true,
+                            GetTimeline()));
+                }
+
+                StepMachineInstruction();
+                instructionsRun++;
             }
 
             return DebugResult<RunFrameResult>.Success(
-                new RunFrameResult(framesRun, NesCore.frame_count, ToRegisters(NesCore.DebugReadRegisters()), false, GetTimeline()));
+                new RunFrameResult(
+                    Math.Max(0, NesCore.frame_count - startFrame),
+                    NesCore.frame_count,
+                    ToRegisters(NesCore.DebugReadRegisters()),
+                    false,
+                    GetTimeline()));
         }
         catch (Exception ex)
         {
@@ -836,6 +870,99 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
             GetTimeline()));
     }
 
+    public DebugResult<PpuRegisterTraceResult> TracePpuRegisterWrites(PpuRegisterTraceRequest request)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<PpuRegisterTraceResult>();
+        }
+
+        if (request.FrameCount is < 1 or > PpuRegisterTracing.MaxFrames ||
+            request.MaxEvents is < 1 or > PpuRegisterTracing.MaxEvents ||
+            request.Registers.Count is < 1 or > 8 ||
+            request.Registers.Any(address => address is < 0x2000 or > 0x2007))
+        {
+            return DebugResult<PpuRegisterTraceResult>.Failure("invalid_ppu_trace_request", "PPU trace limits or register filters are invalid.");
+        }
+
+        var initial = ReadPpuState();
+        if (!initial.IsSuccess)
+        {
+            return DebugResult<PpuRegisterTraceResult>.Failure(initial.Error!.Code, initial.Error.Message);
+        }
+
+        var controller = SetController(request.Buttons);
+        if (!controller.IsSuccess)
+        {
+            return DebugResult<PpuRegisterTraceResult>.Failure(controller.Error!.Code, controller.Error.Message);
+        }
+
+        var startFrame = NesCore.frame_count;
+        var trace = new ActivePpuRegisterTrace(startFrame, request.MaxEvents, request.Registers);
+        activePpuRegisterTrace = trace;
+        var hitBreakpoint = false;
+        var stopReason = "framesComplete";
+        var instructionLimit = (long)request.FrameCount * PpuRegisterTracing.MaxInstructionsPerFrame;
+        long instructionsRun = 0;
+
+        try
+        {
+            while (NesCore.frame_count - startFrame < request.FrameCount)
+            {
+                if (instructionsRun >= instructionLimit)
+                {
+                    stopReason = "instructionLimit";
+                    break;
+                }
+
+                var registers = ToRegisters(NesCore.DebugReadRegisters());
+                var breakpoint = IsBreakpointHit(ParseWord(registers.Pc), registers);
+                if (!breakpoint.IsSuccess)
+                {
+                    return DebugResult<PpuRegisterTraceResult>.Failure(breakpoint.Error!.Code, breakpoint.Error.Message);
+                }
+
+                if (breakpoint.Value)
+                {
+                    hitBreakpoint = true;
+                    stopReason = "breakpoint";
+                    break;
+                }
+
+                StepMachineInstruction();
+                instructionsRun++;
+            }
+
+            var final = ReadPpuState();
+            if (!final.IsSuccess)
+            {
+                return DebugResult<PpuRegisterTraceResult>.Failure(final.Error!.Code, final.Error.Message);
+            }
+
+            return DebugResult<PpuRegisterTraceResult>.Success(new PpuRegisterTraceResult(
+                request.FrameCount,
+                Math.Max(0, NesCore.frame_count - startFrame),
+                initial.Value,
+                final.Value,
+                trace.Events,
+                trace.Events.Count,
+                trace.EventsObserved,
+                trace.Truncated,
+                hitBreakpoint,
+                stopReason,
+                GetTimeline()));
+        }
+        catch (Exception ex)
+        {
+            return DebugResult<PpuRegisterTraceResult>.Failure("trace_ppu_register_writes_failed", ex.Message);
+        }
+        finally
+        {
+            activePpuRegisterTrace = null;
+            _ = SetController([]);
+        }
+    }
+
     public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format)
     {
         if (!romLoaded)
@@ -1077,6 +1204,7 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
         disposed = true;
         NesCore.exit = true;
         NesCore.DebugSetMemoryObservers(null, null);
+        NesCore.DebugSetPpuRegisterWriteObserver(null);
     }
 
     private void InitializeDebugTracking()
@@ -1089,6 +1217,7 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
         traceLength = 0;
         traceHit = false;
         NesCore.DebugSetMemoryObservers(OnMemoryWrite, null);
+        NesCore.DebugSetPpuRegisterWriteObserver(OnPpuRegisterWrite);
     }
 
     private void StepMachineInstruction()
@@ -1132,6 +1261,45 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
             watchHit = new WatchHit(address, watchpoint.Mode, pc, value);
         }
     }
+
+    private void OnPpuRegisterWrite(NesCoreDebugPpuRegisterWrite write)
+    {
+        var trace = activePpuRegisterTrace;
+        if (trace is null || !trace.Registers.Contains(write.Address))
+        {
+            return;
+        }
+
+        trace.EventsObserved++;
+        if (trace.Events.Count >= trace.MaxEvents)
+        {
+            trace.Truncated = true;
+            return;
+        }
+
+        trace.Events.Add(new PpuRegisterWriteEvent(
+            write.Before.Frame - trace.StartFrame,
+            (ulong)Math.Max(0, write.Before.Frame),
+            write.CpuCycle,
+            totalInstructions,
+            Hex.FormatWord(write.Pc),
+            Hex.FormatWord(write.Address),
+            PpuRegisterTracing.RegisterName(write.Address),
+            Hex.FormatByte(write.Value),
+            ToPpuRegisterSnapshot(write.Before),
+            ToPpuRegisterSnapshot(write.After)));
+    }
+
+    private static PpuRegisterSnapshot ToPpuRegisterSnapshot(NesCoreDebugPpuRegisterSnapshot snapshot) =>
+        new(
+            snapshot.Scanline,
+            snapshot.Dot,
+            snapshot.VBlank,
+            snapshot.RenderingActive,
+            Hex.FormatWord(snapshot.V),
+            Hex.FormatWord(snapshot.T),
+            snapshot.X,
+            snapshot.W);
 
     private void OnMemoryRead(ushort address, ushort pc)
     {
@@ -1463,6 +1631,24 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
     private readonly record struct WriteRecord(ushort Pc, byte Value, ulong Count);
 
     private readonly record struct WatchHit(ushort Address, WatchpointMode Mode, ushort Pc, byte? Value);
+
+    private sealed class ActivePpuRegisterTrace(
+        int startFrame,
+        int maxEvents,
+        IReadOnlySet<ushort> registers)
+    {
+        public int StartFrame { get; } = startFrame;
+
+        public int MaxEvents { get; } = maxEvents;
+
+        public IReadOnlySet<ushort> Registers { get; } = registers;
+
+        public List<PpuRegisterWriteEvent> Events { get; } = [];
+
+        public int EventsObserved { get; set; }
+
+        public bool Truncated { get; set; }
+    }
 
     private sealed record NesRomHeader(int Mapper, int PrgRomBanks, int ChrRomBanks);
 }

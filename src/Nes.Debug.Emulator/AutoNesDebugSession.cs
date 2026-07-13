@@ -106,6 +106,9 @@ public sealed class AutoNesDebugSession(INesDebugSession adnes, INesDebugSession
     public DebugResult<TraceUntilWriteRangeResult> TraceUntilWriteRange(ushort address, int length, int maxInstructions) =>
         Active.TraceUntilWriteRange(address, length, maxInstructions);
 
+    public DebugResult<PpuRegisterTraceResult> TracePpuRegisterWrites(PpuRegisterTraceRequest request) =>
+        Active.TracePpuRegisterWrites(request);
+
     public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format) =>
         Active.ReadScreenRegion(x, y, width, height, format);
 

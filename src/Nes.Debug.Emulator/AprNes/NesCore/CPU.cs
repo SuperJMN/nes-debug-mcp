@@ -98,12 +98,16 @@ namespace AprNes
         static void CpuWrite(ushort addr, byte val)
         {
             cpuBusAddr = addr; cpuIsRead = false;
+            var observePpuRegister = debugPpuRegisterWriteObserver is not null && addr is >= 0x2000 and <= 0x2007;
+            var ppuBefore = observePpuRegister ? DebugReadPpuRegisterSnapshot() : default;
             // Implicit abort: DMA cancelled on write cycle (still in halt phase)
             if (dmcImplicitAbortActive && dmcDmaHalt)
             { dmcImplicitAbortActive = false; dmcDmaRunning = false; dmcDmaHalt = false; }
             // P3-1: cpubus updated AFTER handler — during handler, cpubus holds last READ value
             // This matches TriCNES dataBus vs In distinction ($2000 glitch depends on this)
             mem_write_page[addr >> 13](addr, val);
+            if (observePpuRegister)
+                DebugObservePpuRegisterWrite(addr, val, debugCurrentInstructionPc, debugCpuCycles, ppuBefore);
             cpubus = val;
             internalBus = val;
             debugWriteObserver?.Invoke(addr, val, debugCurrentInstructionPc);
