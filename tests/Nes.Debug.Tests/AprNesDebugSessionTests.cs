@@ -252,12 +252,59 @@ public sealed class AprNesDebugSessionTests
         Assert.Equal("0x42", step.Value.Registers.A);
     }
 
+    [Fact]
+    public void Observe_screen_runs_against_a_real_aprnes_session()
+    {
+        using var temp = new TempRom(CreateMinimalMmc3());
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var observation = session.ObserveScreen(2);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(observation.IsSuccess, observation.Error?.Message);
+        Assert.Equal(2, observation.Value.FramesRun);
+        Assert.Equal(2, observation.Value.Samples.Count);
+        Assert.All(observation.Value.Samples, sample => Assert.StartsWith("sha256:", sample.Hash, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Dump_nametables_atomically_captures_four_distinct_physical_tables_with_attributes()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            ..WritePpuByte(0x2000, 0x11),
+            ..WritePpuByte(0x23C0, 0xA1),
+            ..WritePpuByte(0x2400, 0x22),
+            ..WritePpuByte(0x27C0, 0xA2),
+            ..WritePpuByte(0x2800, 0x33),
+            ..WritePpuByte(0x2BC0, 0xA3),
+            ..WritePpuByte(0x2C00, 0x44),
+            ..WritePpuByte(0x2FC0, 0xA4),
+            0x4C, 0x78, 0x80, // JMP $8078
+        ], flags6: 0x48));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var step = session.StepInstruction(50);
+        var dump = session.DumpNametables(includeDetails: true);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(step.IsSuccess, step.Error?.Message);
+        Assert.True(dump.IsSuccess, dump.Error?.Message);
+        Assert.True(dump.Value.DetailsIncluded);
+        Assert.Equal(4, dump.Value.Nametables.Count);
+        Assert.Equal(["11", "22", "33", "44"], dump.Value.Nametables.Select(table => FirstByte(table.Detail!.Rows[0])));
+        Assert.Equal(["A1", "A2", "A3", "A4"], dump.Value.Nametables.Select(table => FirstByte(table.Detail!.AttributeRows[0])));
+        Assert.Equal(4, dump.Value.Nametables.Select(table => table.Hash).Distinct().Count());
+    }
+
     private static byte[] CreateMinimalMmc3()
     {
         return CreateProgramMmc3([0xA9, 0x42, 0xEA, 0x4C, 0x02, 0x80]);
     }
 
-    private static byte[] CreateProgramMmc3(byte[] program)
+    private static byte[] CreateProgramMmc3(byte[] program, byte flags6 = 0x40)
     {
         var rom = new byte[16 + 2 * 16 * 1024 + 8 * 1024];
         rom[0] = (byte)'N';
@@ -266,7 +313,7 @@ public sealed class AprNesDebugSessionTests
         rom[3] = 0x1A;
         rom[4] = 2;
         rom[5] = 1;
-        rom[6] = 0x40;
+        rom[6] = flags6;
 
         var prg = rom.AsSpan(16, 2 * 16 * 1024);
         program.CopyTo(prg);
@@ -274,6 +321,18 @@ public sealed class AprNesDebugSessionTests
         prg[0x7FFD] = 0x80;
         return rom;
     }
+
+    private static byte[] WritePpuByte(ushort address, byte value) =>
+    [
+        0xA9, (byte)(address >> 8), // LDA #high
+        0x8D, 0x06, 0x20,         // STA $2006
+        0xA9, (byte)address,       // LDA #low
+        0x8D, 0x06, 0x20,         // STA $2006
+        0xA9, value,               // LDA #value
+        0x8D, 0x07, 0x20,         // STA $2007
+    ];
+
+    private static string FirstByte(string row) => row.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
 
     private static byte[] CreateBankedMmc3()
     {

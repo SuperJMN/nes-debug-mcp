@@ -72,7 +72,11 @@ public interface INesDebugSession
 
     DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format);
 
+    DebugResult<ScreenObservationResult> ObserveScreen(int frameCount);
+
     DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps);
+
+    DebugResult<NametableDumpResult> DumpNametables(bool includeDetails);
 
     DebugResult<TilemapDumpResult> DumpTilemap(ushort address);
 

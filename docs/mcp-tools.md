@@ -35,6 +35,12 @@ Execution and state results include a `timeline` object with cumulative `frames`
   ```json
   { "count": 1 }
   ```
+- `observe_screen`: atomically runs up to 600 frames and returns a SHA-256 identity for every rendered frame plus compact changes from the preceding frame. `changedPixels` and `changedBounds` locate the visible change; `changedTileRows` contains only affected 8x8 tile rows, where bit N in `mask` identifies tile column N. Observation stops early if a breakpoint is hit.
+  ```json
+  { "frameCount": 120 }
+  ```
+
+  To investigate a transient frame, save state before observing, find the suspicious `frameOffset`, reload the state, run to that offset, then use `read_screen_region`, `dump_tilemap`, `dump_tileset`, and `dump_oam` for exact evidence.
 - `continue_until_break`: runs until a breakpoint, watchpoint, or instruction limit.
   ```json
   { "maxInstructions": 1000000 }
@@ -110,11 +116,11 @@ Operators are `==`, `!=`, `<`, `<=`, `>`, and `>=`.
   ```
 - `dump_oam`: dumps 64 OAM sprite entries.
 - `read_ppu_state`: reads compact PPU register/counter state.
-- `read_screen_region`: reads deterministic palette-index data and row hashes from a bounded 256x240 screen region.
+- `read_screen_region`: reads deterministic palette-index data and row hashes from a bounded 256x240 screen region. `palette_indices` returns raw `values` automatically for regions up to 1,024 pixels and otherwise returns a compact histogram plus row hashes. Use `palette_indices_raw` to explicitly return every palette index for a larger region, including a full 256x240 frame (61,440 values).
   ```json
   { "x": 0, "y": 0, "width": 16, "height": 16, "format": "palette_indices" }
   ```
-- `dump_tilemap`: dumps a 32x30 nametable from PPU memory.
+- `dump_tilemap`: dumps a complete 32x30 nametable from PPU memory together with its 8x8 attribute table. `rows` contains tile IDs; `attributeAddress` and `attributeRows` contain the 64 physical palette-selection bytes. `address` must be `0x2000`, `0x2400`, `0x2800`, or `0x2C00`.
   ```json
   { "address": "0x2000" }
   ```

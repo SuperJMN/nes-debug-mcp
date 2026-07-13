@@ -179,9 +179,19 @@ public sealed class SynchronizedNesDebugSession(INesDebugSession inner) : INesDe
         lock (gate) { return inner.ReadScreenRegion(x, y, width, height, format); }
     }
 
+    public DebugResult<ScreenObservationResult> ObserveScreen(int frameCount)
+    {
+        lock (gate) { return inner.ObserveScreen(frameCount); }
+    }
+
     public DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps)
     {
         lock (gate) { return inner.RunInputTimeline(steps); }
+    }
+
+    public DebugResult<NametableDumpResult> DumpNametables(bool includeDetails)
+    {
+        lock (gate) { return inner.DumpNametables(includeDetails); }
     }
 
     public DebugResult<TilemapDumpResult> DumpTilemap(ushort address)

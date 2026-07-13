@@ -335,11 +335,52 @@ public sealed record ScreenRegionResult(
     [property: JsonPropertyName("histogram")] IReadOnlyDictionary<string, int> Histogram,
     [property: JsonPropertyName("rowHashes")] IReadOnlyList<string> RowHashes);
 
+public sealed record ScreenObservationResult(
+    [property: JsonPropertyName("framesRequested")] int FramesRequested,
+    [property: JsonPropertyName("framesRun")] int FramesRun,
+    [property: JsonPropertyName("initialHash")] string InitialHash,
+    [property: JsonPropertyName("samples")] IReadOnlyList<ScreenFrameObservation> Samples,
+    [property: JsonPropertyName("hitBreakpoint")] bool HitBreakpoint,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record ScreenFrameObservation(
+    [property: JsonPropertyName("frameOffset")] int FrameOffset,
+    [property: JsonPropertyName("totalFrame")] ulong TotalFrame,
+    [property: JsonPropertyName("hash")] string Hash,
+    [property: JsonPropertyName("changedPixels")] int ChangedPixels,
+    [property: JsonPropertyName("changedTiles")] int ChangedTiles,
+    [property: JsonPropertyName("changedBounds")] ScreenChangeBounds? ChangedBounds,
+    [property: JsonPropertyName("changedTileRows")] IReadOnlyList<ScreenChangedTileRow> ChangedTileRows);
+
+public sealed record ScreenChangeBounds(
+    [property: JsonPropertyName("x")] int X,
+    [property: JsonPropertyName("y")] int Y,
+    [property: JsonPropertyName("width")] int Width,
+    [property: JsonPropertyName("height")] int Height);
+
+public sealed record ScreenChangedTileRow(
+    [property: JsonPropertyName("row")] int Row,
+    [property: JsonPropertyName("mask")] string Mask);
+
 public sealed record TilemapDumpResult(
     [property: JsonPropertyName("address")] string Address,
     [property: JsonPropertyName("width")] int Width,
     [property: JsonPropertyName("height")] int Height,
-    [property: JsonPropertyName("rows")] IReadOnlyList<string> Rows);
+    [property: JsonPropertyName("rows")] IReadOnlyList<string> Rows,
+    [property: JsonPropertyName("attributeAddress")] string AttributeAddress,
+    [property: JsonPropertyName("attributeRows")] IReadOnlyList<string> AttributeRows);
+
+public sealed record NametableDumpResult(
+    [property: JsonPropertyName("detailsIncluded")] bool DetailsIncluded,
+    [property: JsonPropertyName("nametables")] IReadOnlyList<NametableSnapshot> Nametables,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record NametableSnapshot(
+    [property: JsonPropertyName("address")] string Address,
+    [property: JsonPropertyName("hash")] string Hash,
+    [property: JsonPropertyName("tileHash")] string TileHash,
+    [property: JsonPropertyName("attributeHash")] string AttributeHash,
+    [property: JsonPropertyName("detail")] TilemapDumpResult? Detail);
 
 public sealed record TilesetDumpResult(
     [property: JsonPropertyName("address")] string Address,

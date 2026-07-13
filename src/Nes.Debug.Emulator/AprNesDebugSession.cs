@@ -8,11 +8,10 @@ using Nes.Debug.Symbols;
 
 namespace Nes.Debug.Emulator;
 
-public sealed class AprNesDebugSession : INesDebugSession, IDisposable
+public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSource, IDisposable
 {
     private const int ScreenWidth = 256;
     private const int ScreenHeight = 240;
-    private const int MaxRawScreenRegionPixels = 1024;
     private const uint StateMagicV1 = 0x31534E41; // "ANS1"
 
     private static readonly IReadOnlyDictionary<NesButton, byte> ButtonMap =
@@ -849,12 +848,34 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
             return DebugResult<ScreenRegionResult>.Failure("invalid_screen_region", "Screen region must fit within 256x240.");
         }
 
-        if (!format.Equals("palette_indices", StringComparison.OrdinalIgnoreCase))
+        if (!PaletteIndexScreen.TryParseFormat(format, out var forceRaw))
         {
-            return DebugResult<ScreenRegionResult>.Failure("invalid_screen_region_format", "format must be palette_indices.");
+            return DebugResult<ScreenRegionResult>.Failure("invalid_screen_region_format", "format must be palette_indices or palette_indices_raw.");
         }
 
-        return DebugResult<ScreenRegionResult>.Success(BuildPaletteIndexRegion(x, y, width, height));
+        return DebugResult<ScreenRegionResult>.Success(
+            PaletteIndexScreen.Build(NesCore.DebugReadPaletteIndices(), ScreenWidth, x, y, width, height, forceRaw));
+    }
+
+    public DebugResult<ScreenObservationResult> ObserveScreen(int frameCount) =>
+        ScreenObserver.Observe(this, frameCount);
+
+    public DebugResult<int> CopyPaletteIndexFrame(Memory<byte> destination)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<int>();
+        }
+
+        if (destination.Length < ScreenWidth * ScreenHeight)
+        {
+            return DebugResult<int>.Failure(
+                "invalid_screen_frame_buffer",
+                $"destination must contain at least {ScreenWidth * ScreenHeight} bytes.");
+        }
+
+        NesCore.DebugCopyPaletteIndices(destination.Span);
+        return DebugResult<int>.Success(ScreenWidth * ScreenHeight);
     }
 
     public DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps)
@@ -1022,12 +1043,18 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
             return NoRom<TilemapDumpResult>();
         }
 
-        var bytes = ReadPpuBytes(address, 32 * 30);
-        var rows = Enumerable.Range(0, 30)
-            .Select(row => Hex.FormatBytes(bytes.Skip(row * 32).Take(32)))
-            .ToArray();
+        return DebugResult<TilemapDumpResult>.Success(NametableReader.Read(address, ReadPpuBytes));
+    }
 
-        return DebugResult<TilemapDumpResult>.Success(new TilemapDumpResult(Hex.FormatWord(address), 32, 30, rows));
+    public DebugResult<NametableDumpResult> DumpNametables(bool includeDetails)
+    {
+        if (!romLoaded)
+        {
+            return NoRom<NametableDumpResult>();
+        }
+
+        return DebugResult<NametableDumpResult>.Success(
+            NametableReader.ReadAll(ReadPpuBytes, includeDetails, GetTimeline()));
     }
 
     public DebugResult<TilesetDumpResult> DumpTileset(ushort address, int tileCount)
@@ -1269,46 +1296,6 @@ public sealed class AprNesDebugSession : INesDebugSession, IDisposable
         }
 
         return bytes;
-    }
-
-    private ScreenRegionResult BuildPaletteIndexRegion(int x, int y, int width, int height)
-    {
-        var frame = NesCore.DebugReadPaletteIndices();
-        var includeRaw = width * height <= MaxRawScreenRegionPixels;
-        var values = new List<int>(Math.Min(width * height, MaxRawScreenRegionPixels));
-        var histogram = new Dictionary<string, int>(StringComparer.Ordinal);
-        var rowHashes = new List<string>(height);
-
-        for (var row = 0; row < height; row++)
-        {
-            var hash = 2166136261u;
-            for (var column = 0; column < width; column++)
-            {
-                var paletteIndex = frame[(y + row) * ScreenWidth + x + column] & 0x3F;
-                if (includeRaw)
-                {
-                    values.Add(paletteIndex);
-                }
-
-                var key = paletteIndex.ToString();
-                histogram[key] = histogram.TryGetValue(key, out var count) ? count + 1 : 1;
-                hash ^= (byte)paletteIndex;
-                hash *= 16777619u;
-            }
-
-            rowHashes.Add($"0x{hash:X8}");
-        }
-
-        return new ScreenRegionResult(
-            x,
-            y,
-            width,
-            height,
-            "palette_indices",
-            width * height,
-            includeRaw ? values : null,
-            histogram,
-            rowHashes);
     }
 
     private DebugResult<ContinueResult> Stop(string reason, NesCpuRegisters registers, ulong instructionsRun = 0) =>

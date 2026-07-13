@@ -110,6 +110,7 @@ Implemented tools:
 - `trace_until_write`
 - `trace_until_write_range`
 - `read_screen_region`
+- `observe_screen`
 - `dump_tilemap`
 - `dump_tileset`
 

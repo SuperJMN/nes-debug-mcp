@@ -490,7 +490,7 @@ public static class NesDebugTools
     }
 
     [McpServerTool(Name = "read_screen_region", ReadOnly = true, Destructive = false)]
-    [Description("Reads deterministic palette-index data and summaries from a bounded screen region.")]
+    [Description("Reads deterministic palette-index data from a bounded screen region. Use palette_indices_raw to request every value, including a full 256x240 frame.")]
     public static object ReadScreenRegion(INesDebugSession session, int x, int y, int width, int height, string format = "palette_indices")
     {
         if (x < 0 || y < 0 || width < 1 || height < 1 || x + width > ScreenWidth || y + height > ScreenHeight)
@@ -498,12 +498,24 @@ public static class NesDebugTools
             return Error("invalid_screen_region", "Screen region must fit within 256x240.");
         }
 
-        if (!format.Equals("palette_indices", StringComparison.OrdinalIgnoreCase))
+        if (!PaletteIndexScreen.TryParseFormat(format, out _))
         {
-            return Error("invalid_screen_region_format", "format must be palette_indices.");
+            return Error("invalid_screen_region_format", "format must be palette_indices or palette_indices_raw.");
         }
 
         return ToToolResult(session.ReadScreenRegion(x, y, width, height, format));
+    }
+
+    [McpServerTool(Name = "observe_screen", ReadOnly = false, Destructive = false)]
+    [Description("Runs frames while collecting compact screen-change observations for detecting transient corruption and flicker.")]
+    public static object ObserveScreen(INesDebugSession session, int frameCount = 60)
+    {
+        if (frameCount is < 1 or > ScreenObserver.MaxFrames)
+        {
+            return Error("invalid_frame_count", $"frameCount must be between 1 and {ScreenObserver.MaxFrames}.");
+        }
+
+        return ToToolResult(session.ObserveScreen(frameCount));
     }
 
     [McpServerTool(Name = "run_input_timeline", ReadOnly = false, Destructive = false)]
@@ -558,9 +570,9 @@ public static class NesDebugTools
                     return new ToolError(parsedTilemap.Error!);
                 }
 
-                if (parsedTilemap.Value.Address < 0x2000 || parsedTilemap.Value.Address + 32 * 30 > 0x3000)
+                if (!NametableReader.IsBaseAddress(parsedTilemap.Value.Address))
                 {
-                    return Error("invalid_tilemap_address", "Tilemap range must fit within PPU nametable memory 0x2000..0x2FFF.");
+                    return Error("invalid_tilemap_address", "tilemapAddress must be a nametable base: 0x2000, 0x2400, 0x2800, or 0x2C00.");
                 }
             }
 
@@ -582,8 +594,13 @@ public static class NesDebugTools
         return ToToolResult(session.RunInputTimeline(normalized));
     }
 
+    [McpServerTool(Name = "dump_nametables", ReadOnly = true, Destructive = false)]
+    [Description("Atomically snapshots all four physical NES nametables with compact SHA-256 identities and optional tile/attribute detail.")]
+    public static object DumpNametables(INesDebugSession session, bool includeDetails = false) =>
+        ToToolResult(session.DumpNametables(includeDetails));
+
     [McpServerTool(Name = "dump_tilemap", ReadOnly = true, Destructive = false)]
-    [Description("Dumps a 32x30 NES nametable tilemap from PPU memory.")]
+    [Description("Dumps a complete 32x30 NES nametable and its attribute table from PPU memory.")]
     public static object DumpTilemap(INesDebugSession session, string address = "0x2000")
     {
         var parsed = ParseAddress(address);
@@ -592,9 +609,9 @@ public static class NesDebugTools
             return new ToolError(parsed.Error!);
         }
 
-        if (parsed.Value.Address < 0x2000 || parsed.Value.Address + 32 * 30 > 0x3000)
+        if (!NametableReader.IsBaseAddress(parsed.Value.Address))
         {
-            return Error("invalid_tilemap_address", "Tilemap range must fit within PPU nametable memory 0x2000..0x2FFF.");
+            return Error("invalid_tilemap_address", "address must be a nametable base: 0x2000, 0x2400, 0x2800, or 0x2C00.");
         }
 
         return ToToolResult(session.DumpTilemap(parsed.Value.Address));

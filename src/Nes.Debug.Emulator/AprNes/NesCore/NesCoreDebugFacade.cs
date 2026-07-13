@@ -149,17 +149,28 @@ unsafe public partial class NesCore
     public static byte[] DebugReadPaletteIndices()
     {
         var bytes = new byte[DebugScreenWidth * DebugScreenHeight];
+        DebugCopyPaletteIndices(bytes);
+        return bytes;
+    }
+
+    public static void DebugCopyPaletteIndices(Span<byte> destination)
+    {
+        if (destination.Length < DebugScreenWidth * DebugScreenHeight)
+        {
+            throw new ArgumentException($"Destination must contain at least {DebugScreenWidth * DebugScreenHeight} bytes.", nameof(destination));
+        }
+
+        var frame = destination[..(DebugScreenWidth * DebugScreenHeight)];
         if (ntsc_rowPalettes == null)
         {
-            return bytes;
+            frame.Clear();
+            return;
         }
 
-        for (var i = 0; i < bytes.Length; i++)
+        for (var i = 0; i < frame.Length; i++)
         {
-            bytes[i] = (byte)(ntsc_rowPalettes[i] & 0x3F);
+            frame[i] = (byte)(ntsc_rowPalettes[i] & 0x3F);
         }
-
-        return bytes;
     }
 
     public static uint[] DebugReadRgbFrame()
