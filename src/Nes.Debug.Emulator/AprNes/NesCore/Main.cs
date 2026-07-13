@@ -300,11 +300,14 @@ namespace AprNes
             dmaOamInternalBus = 0; dmaOamAddr = 0;
 
             // PPU control registers ($2000/$2001/$2002)
+            ppuCtrlRegister = 0; ppuMaskRegister = 0;
             VramaddrIncrement = 1;
             SpPatternTableAddr = 0; BgPatternTableAddr = 0;
             Spritesize8x16 = false; NMIable = false;
             ShowBackGround = false; ShowSprites = false;
+            ShowBackGround_Instant = false; ShowSprites_Instant = false;
             ShowBgLeft8 = true; ShowSprLeft8 = true;
+            ppuGreyscale = false; ppuEmphasis = 0;
             isSpriteOverflow = false; isSprite0hit = false; isVblank = false;
             ppuVSET = false; ppuVSET_Latch1 = false; ppuVSET_Latch2 = false;
             pendingSprite0Hit2 = false;

@@ -26,8 +26,10 @@ public readonly record struct NesCoreDebugPpuState(
     byte PpuMask,
     byte PpuStatus,
     byte OamAddr,
-    ushort PpuAddr,
-    ushort PpuScroll,
+    ushort V,
+    ushort T,
+    byte FineX,
+    bool WriteToggle,
     int Scanline,
     int Cycle,
     bool Nmi,
@@ -35,6 +37,25 @@ public readonly record struct NesCoreDebugPpuState(
     bool SpritesEnabled,
     bool BackgroundEnabled,
     ulong PpuCycles);
+
+public readonly record struct NesCoreDebugPpuRegisterSnapshot(
+    int Frame,
+    int Scanline,
+    int Dot,
+    bool VBlank,
+    bool RenderingActive,
+    ushort V,
+    ushort T,
+    byte X,
+    bool W);
+
+public readonly record struct NesCoreDebugPpuRegisterWrite(
+    ushort Address,
+    byte Value,
+    ushort Pc,
+    ulong CpuCycle,
+    NesCoreDebugPpuRegisterSnapshot Before,
+    NesCoreDebugPpuRegisterSnapshot After);
 
 unsafe public partial class NesCore
 {
@@ -49,6 +70,7 @@ unsafe public partial class NesCore
     private static ushort debugCurrentInstructionPc;
     private static Action<ushort, byte, ushort>? debugWriteObserver;
     private static Action<ushort, ushort>? debugReadObserver;
+    private static Action<NesCoreDebugPpuRegisterWrite>? debugPpuRegisterWriteObserver;
 
     public static bool DebugLoad(byte[] romBytes)
     {
@@ -60,6 +82,7 @@ unsafe public partial class NesCore
         debugTimingInitialized = false;
         debugCurrentInstructionPc = 0;
         DebugSetMemoryObservers(null, null);
+        DebugSetPpuRegisterWriteObserver(null);
 
         if (!init(romBytes))
         {
@@ -133,6 +156,41 @@ unsafe public partial class NesCore
         debugReadObserver = readObserver;
     }
 
+    public static void DebugSetPpuRegisterWriteObserver(Action<NesCoreDebugPpuRegisterWrite>? observer) =>
+        debugPpuRegisterWriteObserver = observer;
+
+    private static NesCoreDebugPpuRegisterSnapshot DebugReadPpuRegisterSnapshot()
+    {
+        var renderingEnabled = ShowBackGround_Instant || ShowSprites_Instant;
+        return new NesCoreDebugPpuRegisterSnapshot(
+            frame_count,
+            scanline,
+            ppu_cycles_x,
+            isVblank,
+            renderingEnabled && (scanline is >= 0 and < 240 || scanline == preRenderLine),
+            (ushort)vram_addr,
+            (ushort)vram_addr_internal,
+            (byte)FineX,
+            vram_latch);
+    }
+
+    private static void DebugObservePpuRegisterWrite(
+        ushort address,
+        byte value,
+        ushort pc,
+        ulong cpuCycle,
+        NesCoreDebugPpuRegisterSnapshot before)
+    {
+        debugPpuRegisterWriteObserver?.Invoke(
+            new NesCoreDebugPpuRegisterWrite(
+                address,
+                value,
+                pc,
+                cpuCycle,
+                before,
+                DebugReadPpuRegisterSnapshot()));
+    }
+
     public static byte DebugReadPpu(ushort address) => PpuBusRead(address);
 
     public static byte[] DebugReadOam()
@@ -149,17 +207,28 @@ unsafe public partial class NesCore
     public static byte[] DebugReadPaletteIndices()
     {
         var bytes = new byte[DebugScreenWidth * DebugScreenHeight];
+        DebugCopyPaletteIndices(bytes);
+        return bytes;
+    }
+
+    public static void DebugCopyPaletteIndices(Span<byte> destination)
+    {
+        if (destination.Length < DebugScreenWidth * DebugScreenHeight)
+        {
+            throw new ArgumentException($"Destination must contain at least {DebugScreenWidth * DebugScreenHeight} bytes.", nameof(destination));
+        }
+
+        var frame = destination[..(DebugScreenWidth * DebugScreenHeight)];
         if (ntsc_rowPalettes == null)
         {
-            return bytes;
+            frame.Clear();
+            return;
         }
 
-        for (var i = 0; i < bytes.Length; i++)
+        for (var i = 0; i < frame.Length; i++)
         {
-            bytes[i] = (byte)(ntsc_rowPalettes[i] & 0x3F);
+            frame[i] = (byte)(ntsc_rowPalettes[i] & 0x3F);
         }
-
-        return bytes;
     }
 
     public static uint[] DebugReadRgbFrame()
@@ -180,29 +249,26 @@ unsafe public partial class NesCore
 
     public static NesCoreDebugPpuState DebugReadPpuState()
     {
-        var mask = (byte)(
-            (ShowBackGround ? 0x08 : 0) |
-            (ShowSprites ? 0x10 : 0));
         var status = (byte)(
             (isVblank ? 0x80 : 0) |
             (isSprite0hit ? 0x40 : 0) |
             (isSpriteOverflow ? 0x20 : 0));
 
         return new NesCoreDebugPpuState(
-            (byte)(
-                (NMIable ? 0x80 : 0) |
-                (Spritesize8x16 ? 0x20 : 0)),
-            mask,
+            ppuCtrlRegister,
+            ppuMaskRegister,
             status,
             spr_ram_add,
             (ushort)vram_addr,
             (ushort)vram_addr_internal,
+            (byte)FineX,
+            vram_latch,
             scanline,
             ppu_cycles_x,
             NMILine,
-            ShowBackGround || ShowSprites,
-            ShowSprites,
-            ShowBackGround,
+            (ppuMaskRegister & 0x18) != 0,
+            (ppuMaskRegister & 0x10) != 0,
+            (ppuMaskRegister & 0x08) != 0,
             debugCpuCycles * 3);
     }
 

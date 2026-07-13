@@ -213,14 +213,69 @@ public sealed record PpuStateResult(
     [property: JsonPropertyName("ppustatus")] string PpuStatus,
     [property: JsonPropertyName("oamaddr")] string OamAddr,
     [property: JsonPropertyName("ppuaddr")] string PpuAddr,
-    [property: JsonPropertyName("ppuscroll")] string PpuScroll,
+    [property: JsonPropertyName("ppuscroll")] string? PpuScroll,
     [property: JsonPropertyName("scanline")] int Scanline,
     [property: JsonPropertyName("cycle")] int Cycle,
     [property: JsonPropertyName("nmi")] bool Nmi,
     [property: JsonPropertyName("renderingEnabled")] bool RenderingEnabled,
     [property: JsonPropertyName("spritesEnabled")] bool SpritesEnabled,
     [property: JsonPropertyName("backgroundEnabled")] bool BackgroundEnabled,
-    [property: JsonPropertyName("ppuCycles")] long PpuCycles);
+    [property: JsonPropertyName("ppuCycles")] long PpuCycles)
+{
+    [JsonPropertyName("v")]
+    public string V { get; init; } = "0x0000";
+
+    [JsonPropertyName("t")]
+    public string T { get; init; } = "0x0000";
+
+    [JsonPropertyName("x")]
+    public int X { get; init; }
+
+    [JsonPropertyName("w")]
+    public bool W { get; init; }
+
+    [JsonPropertyName("vblank")]
+    public bool VBlank { get; init; }
+
+    [JsonPropertyName("renderingActive")]
+    public bool RenderingActive { get; init; }
+
+    [JsonPropertyName("control")]
+    public PpuControlState Control { get; init; } = new(0, "0x2000", 1, "0x0000", "0x0000", "8x8", false);
+
+    [JsonPropertyName("mask")]
+    public PpuMaskState Mask { get; init; } = new(false, false, false, false, false, false, false, false);
+
+    [JsonPropertyName("status")]
+    public PpuStatusState Status { get; init; } = new(false, false, false);
+
+    [JsonPropertyName("timeline")]
+    public TimelineCounters Timeline { get; init; } = new(0, 0);
+}
+
+public sealed record PpuControlState(
+    [property: JsonPropertyName("nametableSelect")] int NametableSelect,
+    [property: JsonPropertyName("nametableAddress")] string NametableAddress,
+    [property: JsonPropertyName("vramIncrement")] int VramIncrement,
+    [property: JsonPropertyName("spritePatternTableAddress")] string SpritePatternTableAddress,
+    [property: JsonPropertyName("backgroundPatternTableAddress")] string BackgroundPatternTableAddress,
+    [property: JsonPropertyName("spriteSize")] string SpriteSize,
+    [property: JsonPropertyName("nmiEnabled")] bool NmiEnabled);
+
+public sealed record PpuMaskState(
+    [property: JsonPropertyName("greyscale")] bool Greyscale,
+    [property: JsonPropertyName("backgroundLeftEdgeEnabled")] bool BackgroundLeftEdgeEnabled,
+    [property: JsonPropertyName("spriteLeftEdgeEnabled")] bool SpriteLeftEdgeEnabled,
+    [property: JsonPropertyName("backgroundEnabled")] bool BackgroundEnabled,
+    [property: JsonPropertyName("spritesEnabled")] bool SpritesEnabled,
+    [property: JsonPropertyName("emphasizeRed")] bool EmphasizeRed,
+    [property: JsonPropertyName("emphasizeGreen")] bool EmphasizeGreen,
+    [property: JsonPropertyName("emphasizeBlue")] bool EmphasizeBlue);
+
+public sealed record PpuStatusState(
+    [property: JsonPropertyName("spriteOverflow")] bool SpriteOverflow,
+    [property: JsonPropertyName("spriteZeroHit")] bool SpriteZeroHit,
+    [property: JsonPropertyName("vblank")] bool VBlank);
 
 public sealed record LastWriterResult(
     [property: JsonPropertyName("found")] bool Found,
@@ -261,6 +316,103 @@ public sealed record TraceUntilWriteRangeResult(
     [property: JsonPropertyName("ppuState")] PpuStateResult PpuState,
     [property: JsonPropertyName("disassembly")] DisassembleResult Disassembly,
     [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record PpuRegisterTraceRequest(
+    int FrameCount,
+    int MaxEvents,
+    IReadOnlySet<ushort> Registers,
+    IReadOnlyList<NesButton> Buttons);
+
+public sealed record PpuRegisterTraceResult(
+    [property: JsonPropertyName("framesRequested")] int FramesRequested,
+    [property: JsonPropertyName("framesRun")] int FramesRun,
+    [property: JsonPropertyName("initialPpuState")] PpuStateResult InitialPpuState,
+    [property: JsonPropertyName("finalPpuState")] PpuStateResult FinalPpuState,
+    [property: JsonPropertyName("events")] IReadOnlyList<PpuRegisterWriteEvent> Events,
+    [property: JsonPropertyName("eventCount")] int EventCount,
+    [property: JsonPropertyName("eventsObserved")] int EventsObserved,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("hitBreakpoint")] bool HitBreakpoint,
+    [property: JsonPropertyName("stopReason")] string StopReason,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record PpuRegisterWriteEvent(
+    [property: JsonPropertyName("frameOffset")] int FrameOffset,
+    [property: JsonPropertyName("frame")] ulong Frame,
+    [property: JsonPropertyName("cpuCycle")] ulong CpuCycle,
+    [property: JsonPropertyName("instructionCounter")] ulong InstructionCounter,
+    [property: JsonPropertyName("pc")] string Pc,
+    [property: JsonPropertyName("address")] string Address,
+    [property: JsonPropertyName("register")] string Register,
+    [property: JsonPropertyName("value")] string Value,
+    [property: JsonPropertyName("before")] PpuRegisterSnapshot Before,
+    [property: JsonPropertyName("after")] PpuRegisterSnapshot After);
+
+public sealed record PpuRegisterSnapshot(
+    [property: JsonPropertyName("scanline")] int Scanline,
+    [property: JsonPropertyName("dot")] int Dot,
+    [property: JsonPropertyName("vblank")] bool VBlank,
+    [property: JsonPropertyName("renderingActive")] bool RenderingActive,
+    [property: JsonPropertyName("v")] string V,
+    [property: JsonPropertyName("t")] string T,
+    [property: JsonPropertyName("x")] int X,
+    [property: JsonPropertyName("w")] bool W);
+
+public sealed record MemoryProbe(ushort Address, int Length);
+
+public sealed class ExecutionMemoryProbeInput
+{
+    [JsonPropertyName("address")]
+    public string Address { get; init; } = "";
+
+    [JsonPropertyName("length")]
+    public int Length { get; init; }
+}
+
+public sealed record ExecutionObservationRequest(
+    int FrameCount,
+    IReadOnlyList<NesButton> Buttons,
+    IReadOnlyList<MemoryProbe> MemoryProbes,
+    bool IncludePpuState,
+    bool TracePpuWrites,
+    int MaxPpuEvents,
+    IReadOnlySet<ushort> PpuRegisters);
+
+public sealed record ExecutionObservationResult(
+    [property: JsonPropertyName("framesRequested")] int FramesRequested,
+    [property: JsonPropertyName("framesRun")] int FramesRun,
+    [property: JsonPropertyName("heldButtons")] IReadOnlyList<string> HeldButtons,
+    [property: JsonPropertyName("initialFramebufferHash")] string InitialFramebufferHash,
+    [property: JsonPropertyName("frames")] IReadOnlyList<ExecutionFrameObservation> Frames,
+    [property: JsonPropertyName("ppuEvents")] IReadOnlyList<PpuRegisterWriteEvent> PpuEvents,
+    [property: JsonPropertyName("ppuEventCount")] int PpuEventCount,
+    [property: JsonPropertyName("ppuEventsObserved")] int PpuEventsObserved,
+    [property: JsonPropertyName("ppuTraceTruncated")] bool PpuTraceTruncated,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("initialNametables")] NametableDumpResult InitialNametables,
+    [property: JsonPropertyName("finalNametables")] NametableDumpResult FinalNametables,
+    [property: JsonPropertyName("hitBreakpoint")] bool HitBreakpoint,
+    [property: JsonPropertyName("stopReason")] string StopReason,
+    [property: JsonPropertyName("released")] ControllerStateResult Released,
+    [property: JsonPropertyName("limits")] ExecutionObservationAppliedLimits Limits,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record ExecutionFrameObservation(
+    [property: JsonPropertyName("screen")] ScreenFrameObservation Screen,
+    [property: JsonPropertyName("memory")] IReadOnlyList<MemoryProbeObservation> Memory,
+    [property: JsonPropertyName("ppuState")] PpuStateResult? PpuState);
+
+public sealed record MemoryProbeObservation(
+    [property: JsonPropertyName("address")] string Address,
+    [property: JsonPropertyName("length")] int Length,
+    [property: JsonPropertyName("bytesHex")] string BytesHex);
+
+public sealed record ExecutionObservationAppliedLimits(
+    [property: JsonPropertyName("maxFrames")] int MaxFrames,
+    [property: JsonPropertyName("maxMemoryProbes")] int MaxMemoryProbes,
+    [property: JsonPropertyName("maxMemoryProbeLength")] int MaxMemoryProbeLength,
+    [property: JsonPropertyName("maxMemoryBytesPerFrame")] int MaxMemoryBytesPerFrame,
+    [property: JsonPropertyName("maxPpuEvents")] int MaxPpuEvents);
 
 public sealed record RunUntilConditionResult(
     [property: JsonPropertyName("stopped")] bool Stopped,
@@ -335,11 +487,58 @@ public sealed record ScreenRegionResult(
     [property: JsonPropertyName("histogram")] IReadOnlyDictionary<string, int> Histogram,
     [property: JsonPropertyName("rowHashes")] IReadOnlyList<string> RowHashes);
 
+public sealed record ScreenObservationResult(
+    [property: JsonPropertyName("framesRequested")] int FramesRequested,
+    [property: JsonPropertyName("framesRun")] int FramesRun,
+    [property: JsonPropertyName("initialHash")] string InitialHash,
+    [property: JsonPropertyName("samples")] IReadOnlyList<ScreenFrameObservation> Samples,
+    [property: JsonPropertyName("hitBreakpoint")] bool HitBreakpoint,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record ScreenFrameObservation(
+    [property: JsonPropertyName("frameOffset")] int FrameOffset,
+    [property: JsonPropertyName("totalFrame")] ulong TotalFrame,
+    [property: JsonPropertyName("hash")] string Hash,
+    [property: JsonPropertyName("changedPixels")] int ChangedPixels,
+    [property: JsonPropertyName("changedTiles")] int ChangedTiles,
+    [property: JsonPropertyName("changedBounds")] ScreenChangeBounds? ChangedBounds,
+    [property: JsonPropertyName("changedTileRows")] IReadOnlyList<ScreenChangedTileRow> ChangedTileRows);
+
+public sealed record ScreenChangeBounds(
+    [property: JsonPropertyName("x")] int X,
+    [property: JsonPropertyName("y")] int Y,
+    [property: JsonPropertyName("width")] int Width,
+    [property: JsonPropertyName("height")] int Height);
+
+public sealed record ScreenChangedTileRow(
+    [property: JsonPropertyName("row")] int Row,
+    [property: JsonPropertyName("mask")] string Mask);
+
 public sealed record TilemapDumpResult(
     [property: JsonPropertyName("address")] string Address,
     [property: JsonPropertyName("width")] int Width,
     [property: JsonPropertyName("height")] int Height,
-    [property: JsonPropertyName("rows")] IReadOnlyList<string> Rows);
+    [property: JsonPropertyName("rows")] IReadOnlyList<string> Rows,
+    [property: JsonPropertyName("attributeAddress")] string AttributeAddress,
+    [property: JsonPropertyName("attributeRows")] IReadOnlyList<string> AttributeRows)
+{
+    public TilemapDumpResult(string address, int width, int height, IReadOnlyList<string> rows)
+        : this(address, width, height, rows, "", [])
+    {
+    }
+}
+
+public sealed record NametableDumpResult(
+    [property: JsonPropertyName("detailsIncluded")] bool DetailsIncluded,
+    [property: JsonPropertyName("nametables")] IReadOnlyList<NametableSnapshot> Nametables,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
+
+public sealed record NametableSnapshot(
+    [property: JsonPropertyName("address")] string Address,
+    [property: JsonPropertyName("hash")] string Hash,
+    [property: JsonPropertyName("tileHash")] string TileHash,
+    [property: JsonPropertyName("attributeHash")] string AttributeHash,
+    [property: JsonPropertyName("detail")] TilemapDumpResult? Detail);
 
 public sealed record TilesetDumpResult(
     [property: JsonPropertyName("address")] string Address,

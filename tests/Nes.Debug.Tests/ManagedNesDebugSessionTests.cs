@@ -1,5 +1,6 @@
 using Nes.Debug.Core;
 using Nes.Debug.Emulator;
+using System.Text.Json;
 
 namespace Nes.Debug.Tests;
 
@@ -168,6 +169,49 @@ public sealed class ManagedNesDebugSessionTests
         Assert.Null(large.Value.Values);
         Assert.Equal(8, large.Value.RowHashes.Count);
         Assert.Equal(2048, large.Value.PixelCount);
+    }
+
+    [Fact]
+    public void Read_screen_region_can_return_all_palette_indices_for_a_full_frame_when_requested()
+    {
+        using var temp = new TempRom(CreateMinimalNrom());
+        using var session = new ManagedNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var runFrame = session.RunFrame(1);
+        var frame = session.ReadScreenRegion(0, 0, 256, 240, "palette_indices_raw");
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(runFrame.IsSuccess, runFrame.Error?.Message);
+        Assert.True(frame.IsSuccess, frame.Error?.Message);
+        Assert.Equal("palette_indices_raw", frame.Value.Format);
+        Assert.Equal(61_440, frame.Value.PixelCount);
+        Assert.Equal(61_440, frame.Value.Values?.Count);
+        Assert.Equal(240, frame.Value.RowHashes.Count);
+    }
+
+    [Fact]
+    public void Dump_tilemap_includes_the_physical_attribute_table()
+    {
+        using var temp = new TempRom(CreateMinimalNrom(
+        [
+            ..WritePpuByte(0x2000, 0x11),
+            ..WritePpuByte(0x23C0, 0xAA),
+            0x4C, 0x21, 0x80, // JMP $8021
+        ]));
+        using var session = new ManagedNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var step = session.StepInstruction(14);
+        var tilemap = session.DumpTilemap(0x2000);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(step.IsSuccess, step.Error?.Message);
+        Assert.True(tilemap.IsSuccess, tilemap.Error?.Message);
+
+        var json = JsonSerializer.Serialize(tilemap.Value);
+        Assert.Contains("\"attributeAddress\":\"0x23C0\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"attributeRows\":[\"AA", json, StringComparison.Ordinal);
     }
 
     [Fact]

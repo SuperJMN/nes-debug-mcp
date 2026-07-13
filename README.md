@@ -2,7 +2,7 @@
 
 `Nes.Mcp` is a cross-platform .NET MCP server for inspecting and controlling NES ROMs in iNES format.
 
-The MCP server exposes CPU stepping, frame execution, deterministic controller input timelines, breakpoints/watchpoints, CPU memory reads/writes, PPU/OAM inspection, symbols, lightweight disassembly, savestates, write tracing, screen-region probes, and PNG screen capture.
+The MCP server exposes CPU stepping, frame execution, deterministic controller input timelines, breakpoints/watchpoints, CPU memory reads/writes, authoritative PPU/OAM inspection, continuous PPU-register tracing, correlated screen/RAM/PPU observation, symbols, lightweight disassembly, savestates, screen-region probes, and PNG screen capture.
 
 By default `Nes.Mcp` runs in `auto` mode: the vendored MIT-licensed [ADNES](https://github.com/enusbaum/ADNES) backend is used for mappers 0-3, and the vendored [AprNes](https://github.com/erspicu/AprNes) backend is used for broader mapper coverage, including MMC3. AprNes now implements the MCP debug workflows exposed by the tool surface, including savestates, continue/break/watch execution stops, conditional runs, last-writer queries, and write tracing.
 
@@ -47,7 +47,7 @@ Use stdio transport. For development against this local checkout:
         "run",
         "--no-restore",
         "--project",
-        "/home/jmn/Repos/NesMcp/src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj"
+        "/absolute/path/to/NesMcp/src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj"
       ],
       "startup_timeout_sec": 60,
       "tool_timeout_sec": 60
@@ -55,6 +55,8 @@ Use stdio transport. For development against this local checkout:
   }
 }
 ```
+
+After changing or updating the local checkout, restart the MCP client so it terminates and relaunches the stdio server. The `dnx` form uses the published NuGet package; use the local `dotnet run` form when validating source changes that have not been released as a package yet.
 
 Once the tool is packed and published, the path-independent form should be:
 
@@ -109,7 +111,11 @@ Implemented tools:
 - `find_last_writers`
 - `trace_until_write`
 - `trace_until_write_range`
+- `trace_ppu_register_writes`
 - `read_screen_region`
+- `observe_screen`
+- `observe_execution`
+- `dump_nametables`
 - `dump_tilemap`
 - `dump_tileset`
 

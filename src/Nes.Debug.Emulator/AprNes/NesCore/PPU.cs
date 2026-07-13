@@ -124,6 +124,7 @@ namespace AprNes
         }
 
         //ppu ctrl 0x2000
+        static byte ppuCtrlRegister = 0;
         static int VramaddrIncrement = 1, SpPatternTableAddr = 0, BgPatternTableAddr = 0;
         static public bool Spritesize8x16 = false;
         static bool NMIable = false;
@@ -134,6 +135,7 @@ namespace AprNes
         // Tier 2: ShowBackGround/ShowSprites — delayed by ppu2001UpdateDelay (2-3 PPU cycles).
         //         Used for: pixel rendering, backdrop fill, sprite compositing
         // Tier 3: ppuRenderingEnabled — end-of-dot delay of Tier 1. Used for: tile fetch, sprite eval
+        static byte ppuMaskRegister = 0;
         public static bool ShowBackGround = false, ShowSprites = false; // Tier 2 (delayed)
         static bool ShowBackGround_Instant = false, ShowSprites_Instant = false; // Tier 1 (immediate)
         static bool ShowBgLeft8 = true, ShowSprLeft8 = true; // bit1/bit2 (delayed with $2001)
@@ -1041,6 +1043,7 @@ namespace AprNes
         static void ppu_w_2000(byte value)
         {
             openbus = value;
+            ppuCtrlRegister = value;
 
             // TriCNES line 9453-9477: $2000 write handler
             // P3-1: DataBus glitch — t register uses cpubus (dataBus) initially
@@ -1061,6 +1064,7 @@ namespace AprNes
         static void ppu_w_2001(byte value)
         {
             openbus = value;
+            ppuMaskRegister = value;
 
             // Tier 1: Instant flags — take effect immediately
             ShowBackGround_Instant = (value & 0x08) != 0;

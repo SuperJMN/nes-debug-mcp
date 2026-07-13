@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Nes.Debug.Core;
@@ -47,8 +48,12 @@ public sealed class McpToolValidationTests
             "find_last_writers",
             "trace_until_write",
             "trace_until_write_range",
+            "trace_ppu_register_writes",
             "read_screen_region",
+            "observe_screen",
+            "observe_execution",
             "run_input_timeline",
+            "dump_nametables",
             "dump_tilemap",
             "dump_tileset",
         ];
@@ -289,6 +294,89 @@ public sealed class McpToolValidationTests
     }
 
     [Fact]
+    public void Trace_ppu_register_writes_normalizes_registers_and_controller_input()
+    {
+        var ppu = EmptyPpuState();
+        var session = new FakeDebugSession
+        {
+            PpuRegisterTraceResult = DebugResult<PpuRegisterTraceResult>.Success(
+                new PpuRegisterTraceResult(2, 0, ppu, ppu, [], 0, 0, false, true, "breakpoint", new TimelineCounters(0, 0))),
+        };
+
+        var result = NesDebugTools.TracePpuRegisterWrites(
+            session,
+            2,
+            25,
+            ["PPUCTRL", "$2007"],
+            ["right", "a"]);
+
+        Assert.IsType<PpuRegisterTraceResult>(result);
+        Assert.True(session.TracePpuRegisterWritesCalled);
+        Assert.NotNull(session.LastPpuRegisterTraceRequest);
+        Assert.Equal(2, session.LastPpuRegisterTraceRequest.FrameCount);
+        Assert.Equal(25, session.LastPpuRegisterTraceRequest.MaxEvents);
+        Assert.Equal([(ushort)0x2000, (ushort)0x2007], session.LastPpuRegisterTraceRequest.Registers.Order());
+        Assert.Equal([NesButton.A, NesButton.Right], session.LastPpuRegisterTraceRequest.Buttons);
+    }
+
+    [Fact]
+    public void Trace_ppu_register_writes_rejects_registers_outside_the_ppu_range()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.TracePpuRegisterWrites(session, registers: ["$4014"]);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("invalid_ppu_register", error.Error.Code);
+        Assert.False(session.TracePpuRegisterWritesCalled);
+    }
+
+    [Fact]
+    public void Observe_execution_normalizes_buttons_memory_probes_and_ppu_registers()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.ObserveExecution(
+            session,
+            frameCount: 3,
+            buttons: ["RIGHT", "a", "right"],
+            memoryProbes:
+            [
+                new ExecutionMemoryProbeInput { Address = "$0000", Length = 2 },
+                new ExecutionMemoryProbeInput { Address = "0x07FF", Length = 1 },
+            ],
+            includePpuState: true,
+            tracePpuWrites: true,
+            maxPpuEvents: 25,
+            ppuRegisters: ["PPUCTRL", "$2007", "PPUCTRL"]);
+
+        Assert.IsType<ToolError>(result);
+        Assert.True(session.ObserveExecutionCalled);
+        Assert.NotNull(session.LastExecutionObservationRequest);
+        Assert.Equal(3, session.LastExecutionObservationRequest.FrameCount);
+        Assert.Equal([NesButton.A, NesButton.Right], session.LastExecutionObservationRequest.Buttons);
+        Assert.Equal([new MemoryProbe(0x0000, 2), new MemoryProbe(0x07FF, 1)], session.LastExecutionObservationRequest.MemoryProbes);
+        Assert.True(session.LastExecutionObservationRequest.IncludePpuState);
+        Assert.True(session.LastExecutionObservationRequest.TracePpuWrites);
+        Assert.Equal(25, session.LastExecutionObservationRequest.MaxPpuEvents);
+        Assert.Equal([(ushort)0x2000, (ushort)0x2007], session.LastExecutionObservationRequest.PpuRegisters.Order());
+    }
+
+    [Fact]
+    public void Observe_execution_rejects_memory_probes_outside_cpu_ram_without_calling_session()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.ObserveExecution(
+            session,
+            memoryProbes: [new ExecutionMemoryProbeInput { Address = "$1FFF", Length = 2 }]);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("invalid_memory_probe_range", error.Error.Code);
+        Assert.False(session.ObserveExecutionCalled);
+    }
+
+    [Fact]
     public void Read_screen_region_validates_bounds_before_calling_session()
     {
         var session = new FakeDebugSession();
@@ -297,6 +385,87 @@ public sealed class McpToolValidationTests
 
         var error = Assert.IsType<ToolError>(result);
         Assert.Equal("invalid_screen_region", error.Error.Code);
+        Assert.False(session.ReadScreenRegionCalled);
+    }
+
+    [Fact]
+    public void Read_screen_region_forwards_the_explicit_raw_palette_index_format()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.ReadScreenRegion(session, 0, 0, 256, 240, "palette_indices_raw");
+
+        Assert.False(result is ToolError);
+        Assert.True(session.ReadScreenRegionCalled);
+        Assert.Equal("palette_indices_raw", session.LastScreenRegionFormat);
+    }
+
+    [Fact]
+    public void Dump_tilemap_rejects_addresses_that_are_not_nametable_bases()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.DumpTilemap(session, "0x2100");
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("invalid_tilemap_address", error.Error.Code);
+        Assert.False(session.DumpTilemapCalled);
+    }
+
+    [Fact]
+    public void Tilemap_result_preserves_the_legacy_four_argument_constructor()
+    {
+        var result = new TilemapDumpResult("0x2000", 32, 30, ["00"]);
+
+        Assert.Equal("0x2000", result.Address);
+        Assert.Empty(result.AttributeAddress);
+        Assert.Empty(result.AttributeRows);
+    }
+
+    [Fact]
+    public void Run_input_timeline_rejects_tilemap_addresses_that_are_not_nametable_bases()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.RunInputTimeline(
+            session,
+            [new InputTimelineStep { Frames = 1, Buttons = [], DumpTilemap = true, TilemapAddress = "0x2100" }]);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("invalid_tilemap_address", error.Error.Code);
+        Assert.False(session.RunInputTimelineCalled);
+    }
+
+    [Fact]
+    public void Observe_screen_reports_a_one_frame_tile_change_and_its_reversion()
+    {
+        var baseline = new int[256 * 240];
+        var corrupted = baseline.ToArray();
+        corrupted[16 * 256 + 8] = 1;
+        var session = new FakeDebugSession();
+        session.ScreenFrames.Enqueue(baseline);
+        session.ScreenFrames.Enqueue(corrupted);
+        session.ScreenFrames.Enqueue(baseline);
+
+        var result = NesDebugTools.ObserveScreen(session, 2);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(result));
+        var root = json.RootElement;
+        Assert.True(root.TryGetProperty("initialHash", out var initialHash));
+        Assert.Equal(2, root.GetProperty("framesRun").GetInt32());
+        var samples = root.GetProperty("samples");
+        Assert.Equal(2, samples.GetArrayLength());
+
+        var corruption = samples[0];
+        Assert.Equal(1, corruption.GetProperty("changedPixels").GetInt32());
+        Assert.Equal(1, corruption.GetProperty("changedTiles").GetInt32());
+        Assert.Equal(8, corruption.GetProperty("changedBounds").GetProperty("x").GetInt32());
+        Assert.Equal(16, corruption.GetProperty("changedBounds").GetProperty("y").GetInt32());
+        var changedTileRow = Assert.Single(corruption.GetProperty("changedTileRows").EnumerateArray());
+        Assert.Equal(2, changedTileRow.GetProperty("row").GetInt32());
+        Assert.Equal("0x00000002", changedTileRow.GetProperty("mask").GetString());
+
+        Assert.Equal(initialHash.GetString(), samples[1].GetProperty("hash").GetString());
         Assert.False(session.ReadScreenRegionCalled);
     }
 
@@ -448,7 +617,7 @@ public sealed class McpToolValidationTests
             false,
             0);
 
-    private sealed class FakeDebugSession : INesDebugSession
+    private sealed class FakeDebugSession : INesDebugSession, IPaletteIndexFrameSource
     {
         public bool ReadMemoryCalled { get; private set; }
         public bool SetControllerCalled { get; private set; }
@@ -458,18 +627,26 @@ public sealed class McpToolValidationTests
         public bool SetWatchpointRangeCalled { get; private set; }
         public bool RunUntilConditionCalled { get; private set; }
         public bool TraceUntilWriteRangeCalled { get; private set; }
+        public bool TracePpuRegisterWritesCalled { get; private set; }
+        public bool ObserveExecutionCalled { get; private set; }
         public bool ReadScreenRegionCalled { get; private set; }
+
+        public string? LastScreenRegionFormat { get; private set; }
         public bool RunInputTimelineCalled { get; private set; }
         public bool StepOverCalled { get; private set; }
         public bool SaveStateCalled { get; private set; }
         public bool CaptureScreenCalled { get; private set; }
         public bool ReadSymbolCalled { get; private set; }
         public bool DumpTilesetCalled { get; private set; }
+        public bool DumpTilemapCalled { get; private set; }
         public ushort LastReadAddress { get; private set; }
         public int LastReadLength { get; private set; }
         public IReadOnlyList<NesButton> LastButtons { get; private set; } = [];
         public IReadOnlyList<NesButton> LastPressedButtons { get; private set; } = [];
         public IReadOnlyList<InputTimelineStep> LastInputTimelineSteps { get; private set; } = [];
+        public PpuRegisterTraceRequest? LastPpuRegisterTraceRequest { get; private set; }
+        public ExecutionObservationRequest? LastExecutionObservationRequest { get; private set; }
+        public Queue<IReadOnlyList<int>> ScreenFrames { get; } = new();
         public int LastPressFrameCount { get; private set; }
         public ushort LastBreakpointAddress { get; private set; }
         public string? LastBreakpointCondition { get; private set; }
@@ -498,6 +675,8 @@ public sealed class McpToolValidationTests
             DebugResult<NesCpuRegisters>.Failure("not_configured", "Fake session result was not configured.");
         public DebugResult<PpuStateResult> ReadPpuStateResult { get; init; } =
             DebugResult<PpuStateResult>.Failure("not_configured", "Fake session result was not configured.");
+        public DebugResult<PpuRegisterTraceResult> PpuRegisterTraceResult { get; init; } =
+            DebugResult<PpuRegisterTraceResult>.Failure("not_configured", "Fake session result was not configured.");
 
         public DebugResult<LoadRomResult> LoadRom(string path) => throw new NotSupportedException();
 
@@ -513,7 +692,14 @@ public sealed class McpToolValidationTests
 
         public DebugResult<StepInstructionResult> StepInstruction(int count) => throw new NotSupportedException();
 
-        public DebugResult<RunFrameResult> RunFrame(int count) => throw new NotSupportedException();
+        public DebugResult<RunFrameResult> RunFrame(int count)
+        {
+            RunFrameCalls += count;
+            return DebugResult<RunFrameResult>.Success(
+                new RunFrameResult(count, RunFrameCalls, EmptyRegisters(), false, new TimelineCounters((ulong)RunFrameCalls, 0)));
+        }
+
+        public int RunFrameCalls { get; private set; }
 
         public DebugResult<ControllerStateResult> SetController(IReadOnlyList<NesButton> pressedButtons)
         {
@@ -630,10 +816,40 @@ public sealed class McpToolValidationTests
             throw new NotSupportedException();
         }
 
+        public DebugResult<PpuRegisterTraceResult> TracePpuRegisterWrites(PpuRegisterTraceRequest request)
+        {
+            TracePpuRegisterWritesCalled = true;
+            LastPpuRegisterTraceRequest = request;
+            return PpuRegisterTraceResult;
+        }
+
         public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format)
         {
             ReadScreenRegionCalled = true;
-            throw new NotSupportedException();
+            LastScreenRegionFormat = format;
+            var values = ScreenFrames.Count > 0 ? ScreenFrames.Dequeue() : null;
+            return DebugResult<ScreenRegionResult>.Success(
+                new ScreenRegionResult(x, y, width, height, format, width * height, values, new Dictionary<string, int>(), []));
+        }
+
+        public DebugResult<ScreenObservationResult> ObserveScreen(int frameCount) => ScreenObserver.Observe(this, frameCount);
+
+        public DebugResult<ExecutionObservationResult> ObserveExecution(ExecutionObservationRequest request)
+        {
+            ObserveExecutionCalled = true;
+            LastExecutionObservationRequest = request;
+            return DebugResult<ExecutionObservationResult>.Failure("not_configured", "Fake session result was not configured.");
+        }
+
+        public DebugResult<int> CopyPaletteIndexFrame(Memory<byte> destination)
+        {
+            var values = ScreenFrames.Dequeue();
+            for (var index = 0; index < values.Count; index++)
+            {
+                destination.Span[index] = (byte)(values[index] & 0x3F);
+            }
+
+            return DebugResult<int>.Success(values.Count);
         }
 
         public DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps)
@@ -643,7 +859,16 @@ public sealed class McpToolValidationTests
             return RunInputTimelineResult;
         }
 
-        public DebugResult<TilemapDumpResult> DumpTilemap(ushort address) => throw new NotSupportedException();
+        public DebugResult<NametableDumpResult> DumpNametables(bool includeDetails) =>
+            DebugResult<NametableDumpResult>.Success(
+                new NametableDumpResult(includeDetails, [], new TimelineCounters(0, 0)));
+
+        public DebugResult<TilemapDumpResult> DumpTilemap(ushort address)
+        {
+            DumpTilemapCalled = true;
+            return DebugResult<TilemapDumpResult>.Success(
+                new TilemapDumpResult("0x2000", 32, 30, [], "0x23C0", []));
+        }
 
         public DebugResult<TilesetDumpResult> DumpTileset(ushort address, int tileCount)
         {

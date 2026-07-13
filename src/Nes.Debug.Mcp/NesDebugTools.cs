@@ -489,8 +489,43 @@ public static class NesDebugTools
             : new ToolError(range.Error!);
     }
 
+    [McpServerTool(Name = "trace_ppu_register_writes", ReadOnly = false, Destructive = false)]
+    [Description("Atomically runs bounded AprNes frames and records every selected CPU write to $2000-$2007 with exact pre/post PPU register snapshots.")]
+    public static object TracePpuRegisterWrites(
+        INesDebugSession session,
+        int frameCount = 1,
+        int maxEvents = 1000,
+        string[]? registers = null,
+        string[]? buttons = null)
+    {
+        if (frameCount is < 1 or > PpuRegisterTracing.MaxFrames)
+        {
+            return Error("invalid_frame_count", $"frameCount must be between 1 and {PpuRegisterTracing.MaxFrames}.");
+        }
+
+        if (maxEvents is < 1 or > PpuRegisterTracing.MaxEvents)
+        {
+            return Error("invalid_max_events", $"maxEvents must be between 1 and {PpuRegisterTracing.MaxEvents}.");
+        }
+
+        var parsedRegisters = ParsePpuRegisters(registers, "registers");
+        if (!parsedRegisters.IsSuccess)
+        {
+            return new ToolError(parsedRegisters.Error!);
+        }
+
+        var parsedButtons = ParseButtons(buttons ?? []);
+        if (!parsedButtons.IsSuccess)
+        {
+            return new ToolError(parsedButtons.Error!);
+        }
+
+        return ToToolResult(session.TracePpuRegisterWrites(
+            new PpuRegisterTraceRequest(frameCount, maxEvents, parsedRegisters.Value, parsedButtons.Value)));
+    }
+
     [McpServerTool(Name = "read_screen_region", ReadOnly = true, Destructive = false)]
-    [Description("Reads deterministic palette-index data and summaries from a bounded screen region.")]
+    [Description("Reads deterministic palette-index data from a bounded screen region. Use palette_indices_raw to request every value, including a full 256x240 frame.")]
     public static object ReadScreenRegion(INesDebugSession session, int x, int y, int width, int height, string format = "palette_indices")
     {
         if (x < 0 || y < 0 || width < 1 || height < 1 || x + width > ScreenWidth || y + height > ScreenHeight)
@@ -498,12 +533,103 @@ public static class NesDebugTools
             return Error("invalid_screen_region", "Screen region must fit within 256x240.");
         }
 
-        if (!format.Equals("palette_indices", StringComparison.OrdinalIgnoreCase))
+        if (!PaletteIndexScreen.TryParseFormat(format, out _))
         {
-            return Error("invalid_screen_region_format", "format must be palette_indices.");
+            return Error("invalid_screen_region_format", "format must be palette_indices or palette_indices_raw.");
         }
 
         return ToToolResult(session.ReadScreenRegion(x, y, width, height, format));
+    }
+
+    [McpServerTool(Name = "observe_screen", ReadOnly = false, Destructive = false)]
+    [Description("Runs frames while collecting compact screen-change observations for detecting transient corruption and flicker.")]
+    public static object ObserveScreen(INesDebugSession session, int frameCount = 60)
+    {
+        if (frameCount is < 1 or > ScreenObserver.MaxFrames)
+        {
+            return Error("invalid_frame_count", $"frameCount must be between 1 and {ScreenObserver.MaxFrames}.");
+        }
+
+        return ToToolResult(session.ObserveScreen(frameCount));
+    }
+
+    [McpServerTool(Name = "observe_execution", ReadOnly = false, Destructive = false)]
+    [Description("Atomically holds controller input for bounded AprNes frames and correlates compact framebuffer changes, RAM probes, optional PPU state, bounded PPU-register writes, nametable hashes, breakpoints, and timeline counters.")]
+    public static object ObserveExecution(
+        INesDebugSession session,
+        int frameCount = 60,
+        string[]? buttons = null,
+        ExecutionMemoryProbeInput[]? memoryProbes = null,
+        bool includePpuState = false,
+        bool tracePpuWrites = true,
+        int maxPpuEvents = 1000,
+        string[]? ppuRegisters = null)
+    {
+        if (frameCount is < 1 or > ExecutionObserver.MaxFrames)
+        {
+            return Error("invalid_frame_count", $"frameCount must be between 1 and {ExecutionObserver.MaxFrames}.");
+        }
+
+        if (maxPpuEvents is < 1 or > ExecutionObserver.MaxPpuEvents)
+        {
+            return Error("invalid_max_ppu_events", $"maxPpuEvents must be between 1 and {ExecutionObserver.MaxPpuEvents}.");
+        }
+
+        var parsedButtons = ParseButtons(buttons ?? []);
+        if (!parsedButtons.IsSuccess)
+        {
+            return new ToolError(parsedButtons.Error!);
+        }
+
+        memoryProbes ??= [];
+        if (memoryProbes.Length > ExecutionObserver.MaxMemoryProbes)
+        {
+            return Error("invalid_memory_probes", $"memoryProbes must contain at most {ExecutionObserver.MaxMemoryProbes} entries.");
+        }
+
+        var parsedProbes = new List<MemoryProbe>(memoryProbes.Length);
+        var totalProbeBytes = 0;
+        foreach (var probe in memoryProbes)
+        {
+            var parsedAddress = ParseAddress(probe.Address);
+            if (!parsedAddress.IsSuccess)
+            {
+                return new ToolError(parsedAddress.Error!);
+            }
+
+            if (probe.Length is < 1 or > ExecutionObserver.MaxMemoryProbeLength)
+            {
+                return Error("invalid_memory_probe_length", $"Each memory probe length must be between 1 and {ExecutionObserver.MaxMemoryProbeLength}.");
+            }
+
+            if (parsedAddress.Value.Address + probe.Length > 0x2000)
+            {
+                return Error("invalid_memory_probe_range", "Memory probes must stay within CPU RAM $0000-$1FFF.");
+            }
+
+            totalProbeBytes += probe.Length;
+            parsedProbes.Add(new MemoryProbe(parsedAddress.Value.Address, probe.Length));
+        }
+
+        if (totalProbeBytes > ExecutionObserver.MaxMemoryBytesPerFrame)
+        {
+            return Error("invalid_memory_probe_total", $"Memory probes may read at most {ExecutionObserver.MaxMemoryBytesPerFrame} bytes per frame in total.");
+        }
+
+        var parsedRegisters = ParsePpuRegisters(ppuRegisters, "ppuRegisters");
+        if (!parsedRegisters.IsSuccess)
+        {
+            return new ToolError(parsedRegisters.Error!);
+        }
+
+        return ToToolResult(session.ObserveExecution(new ExecutionObservationRequest(
+            frameCount,
+            parsedButtons.Value,
+            parsedProbes,
+            includePpuState,
+            tracePpuWrites,
+            maxPpuEvents,
+            parsedRegisters.Value)));
     }
 
     [McpServerTool(Name = "run_input_timeline", ReadOnly = false, Destructive = false)]
@@ -558,9 +684,9 @@ public static class NesDebugTools
                     return new ToolError(parsedTilemap.Error!);
                 }
 
-                if (parsedTilemap.Value.Address < 0x2000 || parsedTilemap.Value.Address + 32 * 30 > 0x3000)
+                if (!NametableReader.IsBaseAddress(parsedTilemap.Value.Address))
                 {
-                    return Error("invalid_tilemap_address", "Tilemap range must fit within PPU nametable memory 0x2000..0x2FFF.");
+                    return Error("invalid_tilemap_address", "tilemapAddress must be a nametable base: 0x2000, 0x2400, 0x2800, or 0x2C00.");
                 }
             }
 
@@ -582,8 +708,13 @@ public static class NesDebugTools
         return ToToolResult(session.RunInputTimeline(normalized));
     }
 
+    [McpServerTool(Name = "dump_nametables", ReadOnly = true, Destructive = false)]
+    [Description("Atomically snapshots all four physical NES nametables with compact SHA-256 identities and optional tile/attribute detail.")]
+    public static object DumpNametables(INesDebugSession session, bool includeDetails = false) =>
+        ToToolResult(session.DumpNametables(includeDetails));
+
     [McpServerTool(Name = "dump_tilemap", ReadOnly = true, Destructive = false)]
-    [Description("Dumps a 32x30 NES nametable tilemap from PPU memory.")]
+    [Description("Dumps a complete 32x30 NES nametable and its attribute table from PPU memory.")]
     public static object DumpTilemap(INesDebugSession session, string address = "0x2000")
     {
         var parsed = ParseAddress(address);
@@ -592,9 +723,9 @@ public static class NesDebugTools
             return new ToolError(parsed.Error!);
         }
 
-        if (parsed.Value.Address < 0x2000 || parsed.Value.Address + 32 * 30 > 0x3000)
+        if (!NametableReader.IsBaseAddress(parsed.Value.Address))
         {
-            return Error("invalid_tilemap_address", "Tilemap range must fit within PPU nametable memory 0x2000..0x2FFF.");
+            return Error("invalid_tilemap_address", "address must be a nametable base: 0x2000, 0x2400, 0x2800, or 0x2C00.");
         }
 
         return ToToolResult(session.DumpTilemap(parsed.Value.Address));
@@ -624,6 +755,69 @@ public static class NesDebugTools
     }
 
     private static DebugResult<NesAddress> ParseAddress(string address) => NesAddress.Parse(address);
+
+    private static DebugResult<IReadOnlySet<ushort>> ParsePpuRegisters(string[]? registers, string parameterName)
+    {
+        if (registers is null || registers.Length == 0)
+        {
+            return DebugResult<IReadOnlySet<ushort>>.Success(PpuRegisterTracing.DefaultRegisters);
+        }
+
+        if (registers.Length > 8)
+        {
+            return DebugResult<IReadOnlySet<ushort>>.Failure(
+                "invalid_ppu_registers",
+                $"{parameterName} must contain between 1 and 8 values from $2000-$2007.");
+        }
+
+        var selected = new HashSet<ushort>();
+        foreach (var register in registers)
+        {
+            var parsed = ParsePpuRegister(register);
+            if (!parsed.IsSuccess)
+            {
+                return DebugResult<IReadOnlySet<ushort>>.Failure(parsed.Error!.Code, parsed.Error.Message);
+            }
+
+            selected.Add(parsed.Value);
+        }
+
+        return DebugResult<IReadOnlySet<ushort>>.Success(selected);
+    }
+
+    private static DebugResult<ushort> ParsePpuRegister(string register)
+    {
+        if (string.IsNullOrWhiteSpace(register))
+        {
+            return DebugResult<ushort>.Failure("invalid_ppu_register", "PPU register is required.");
+        }
+
+        var normalized = register.Trim().ToUpperInvariant();
+        var namedAddress = normalized switch
+        {
+            "PPUCTRL" => (ushort?)0x2000,
+            "PPUMASK" => (ushort?)0x2001,
+            "PPUSTATUS" => (ushort?)0x2002,
+            "OAMADDR" => (ushort?)0x2003,
+            "OAMDATA" => (ushort?)0x2004,
+            "PPUSCROLL" => (ushort?)0x2005,
+            "PPUADDR" => (ushort?)0x2006,
+            "PPUDATA" => (ushort?)0x2007,
+            _ => null,
+        };
+        if (namedAddress.HasValue)
+        {
+            return DebugResult<ushort>.Success(namedAddress.Value);
+        }
+
+        var parsed = NesAddress.Parse(register);
+        if (!parsed.IsSuccess || parsed.Value.Address is < 0x2000 or > 0x2007)
+        {
+            return DebugResult<ushort>.Failure("invalid_ppu_register", "registers must contain names or addresses from $2000-$2007.");
+        }
+
+        return DebugResult<ushort>.Success(parsed.Value.Address);
+    }
 
     private static DebugResult<WatchpointMode> ParseWatchpointMode(string mode)
     {

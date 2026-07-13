@@ -70,9 +70,17 @@ public interface INesDebugSession
 
     DebugResult<TraceUntilWriteRangeResult> TraceUntilWriteRange(ushort address, int length, int maxInstructions);
 
+    DebugResult<PpuRegisterTraceResult> TracePpuRegisterWrites(PpuRegisterTraceRequest request);
+
     DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format);
 
+    DebugResult<ScreenObservationResult> ObserveScreen(int frameCount);
+
+    DebugResult<ExecutionObservationResult> ObserveExecution(ExecutionObservationRequest request);
+
     DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps);
+
+    DebugResult<NametableDumpResult> DumpNametables(bool includeDetails);
 
     DebugResult<TilemapDumpResult> DumpTilemap(ushort address);
 

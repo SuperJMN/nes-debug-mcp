@@ -106,11 +106,22 @@ public sealed class AutoNesDebugSession(INesDebugSession adnes, INesDebugSession
     public DebugResult<TraceUntilWriteRangeResult> TraceUntilWriteRange(ushort address, int length, int maxInstructions) =>
         Active.TraceUntilWriteRange(address, length, maxInstructions);
 
+    public DebugResult<PpuRegisterTraceResult> TracePpuRegisterWrites(PpuRegisterTraceRequest request) =>
+        Active.TracePpuRegisterWrites(request);
+
     public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format) =>
         Active.ReadScreenRegion(x, y, width, height, format);
 
+    public DebugResult<ScreenObservationResult> ObserveScreen(int frameCount) => Active.ObserveScreen(frameCount);
+
+    public DebugResult<ExecutionObservationResult> ObserveExecution(ExecutionObservationRequest request) =>
+        Active.ObserveExecution(request);
+
     public DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps) =>
         Active.RunInputTimeline(steps);
+
+    public DebugResult<NametableDumpResult> DumpNametables(bool includeDetails) =>
+        Active.DumpNametables(includeDetails);
 
     public DebugResult<TilemapDumpResult> DumpTilemap(ushort address) => Active.DumpTilemap(address);
 

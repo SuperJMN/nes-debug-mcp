@@ -174,14 +174,34 @@ public sealed class SynchronizedNesDebugSession(INesDebugSession inner) : INesDe
         lock (gate) { return inner.TraceUntilWriteRange(address, length, maxInstructions); }
     }
 
+    public DebugResult<PpuRegisterTraceResult> TracePpuRegisterWrites(PpuRegisterTraceRequest request)
+    {
+        lock (gate) { return inner.TracePpuRegisterWrites(request); }
+    }
+
     public DebugResult<ScreenRegionResult> ReadScreenRegion(int x, int y, int width, int height, string format)
     {
         lock (gate) { return inner.ReadScreenRegion(x, y, width, height, format); }
     }
 
+    public DebugResult<ScreenObservationResult> ObserveScreen(int frameCount)
+    {
+        lock (gate) { return inner.ObserveScreen(frameCount); }
+    }
+
+    public DebugResult<ExecutionObservationResult> ObserveExecution(ExecutionObservationRequest request)
+    {
+        lock (gate) { return inner.ObserveExecution(request); }
+    }
+
     public DebugResult<InputTimelineResult> RunInputTimeline(IReadOnlyList<InputTimelineStep> steps)
     {
         lock (gate) { return inner.RunInputTimeline(steps); }
+    }
+
+    public DebugResult<NametableDumpResult> DumpNametables(bool includeDetails)
+    {
+        lock (gate) { return inner.DumpNametables(includeDetails); }
     }
 
     public DebugResult<TilemapDumpResult> DumpTilemap(ushort address)

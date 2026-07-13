@@ -252,12 +252,359 @@ public sealed class AprNesDebugSessionTests
         Assert.Equal("0x42", step.Value.Registers.A);
     }
 
+    [Fact]
+    public void Observe_screen_runs_against_a_real_aprnes_session()
+    {
+        using var temp = new TempRom(CreateMinimalMmc3());
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var observation = session.ObserveScreen(2);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(observation.IsSuccess, observation.Error?.Message);
+        Assert.Equal(2, observation.Value.FramesRun);
+        Assert.Equal(2, observation.Value.Samples.Count);
+        Assert.All(observation.Value.Samples, sample => Assert.StartsWith("sha256:", sample.Hash, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Dump_nametables_atomically_captures_four_distinct_physical_tables_with_attributes()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            ..WritePpuByte(0x2000, 0x11),
+            ..WritePpuByte(0x23C0, 0xA1),
+            ..WritePpuByte(0x2400, 0x22),
+            ..WritePpuByte(0x27C0, 0xA2),
+            ..WritePpuByte(0x2800, 0x33),
+            ..WritePpuByte(0x2BC0, 0xA3),
+            ..WritePpuByte(0x2C00, 0x44),
+            ..WritePpuByte(0x2FC0, 0xA4),
+            0x4C, 0x78, 0x80, // JMP $8078
+        ], flags6: 0x48));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var step = session.StepInstruction(50);
+        var dump = session.DumpNametables(includeDetails: true);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(step.IsSuccess, step.Error?.Message);
+        Assert.True(dump.IsSuccess, dump.Error?.Message);
+        Assert.True(dump.Value.DetailsIncluded);
+        Assert.Equal(4, dump.Value.Nametables.Count);
+        Assert.Equal(["11", "22", "33", "44"], dump.Value.Nametables.Select(table => FirstByte(table.Detail!.Rows[0])));
+        Assert.Equal(["A1", "A2", "A3", "A4"], dump.Value.Nametables.Select(table => FirstByte(table.Detail!.AttributeRows[0])));
+        Assert.Equal(4, dump.Value.Nametables.Select(table => table.Hash).Distinct().Count());
+    }
+
+    [Fact]
+    public void Read_ppu_state_reports_complete_ppuctrl_ppumask_status_and_timeline()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0xFF,       // LDA #$FF
+            0x8D, 0x00, 0x20, // STA $2000
+            0xA9, 0xFF,       // LDA #$FF
+            0x8D, 0x01, 0x20, // STA $2001
+            0xA9, 0x7E,       // LDA #$7E
+            0x8D, 0x03, 0x20, // STA $2003
+            0x4C, 0x0F, 0x80, // JMP $800F
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var step = session.StepInstruction(7);
+        var ppu = session.ReadPpuState();
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(step.IsSuccess, step.Error?.Message);
+        Assert.True(ppu.IsSuccess, ppu.Error?.Message);
+        Assert.Equal("0xFF", ppu.Value.PpuCtrl);
+        Assert.Equal("0xFF", ppu.Value.PpuMask);
+        Assert.Equal("0x84", ppu.Value.OamAddr);
+        Assert.Null(ppu.Value.PpuScroll);
+        Assert.Equal(3, ppu.Value.Control.NametableSelect);
+        Assert.Equal("0x2C00", ppu.Value.Control.NametableAddress);
+        Assert.Equal(32, ppu.Value.Control.VramIncrement);
+        Assert.Equal("0x1000", ppu.Value.Control.SpritePatternTableAddress);
+        Assert.Equal("0x1000", ppu.Value.Control.BackgroundPatternTableAddress);
+        Assert.Equal("8x16", ppu.Value.Control.SpriteSize);
+        Assert.True(ppu.Value.Control.NmiEnabled);
+        Assert.True(ppu.Value.Mask.Greyscale);
+        Assert.True(ppu.Value.Mask.BackgroundLeftEdgeEnabled);
+        Assert.True(ppu.Value.Mask.SpriteLeftEdgeEnabled);
+        Assert.True(ppu.Value.Mask.BackgroundEnabled);
+        Assert.True(ppu.Value.Mask.SpritesEnabled);
+        Assert.True(ppu.Value.Mask.EmphasizeRed);
+        Assert.True(ppu.Value.Mask.EmphasizeGreen);
+        Assert.True(ppu.Value.Mask.EmphasizeBlue);
+        Assert.Equal(ppu.Value.Status.VBlank, ppu.Value.VBlank);
+        Assert.Equal(step.Value.Timeline, ppu.Value.Timeline);
+        Assert.Equal(ppu.Value.PpuAddr, ppu.Value.V);
+    }
+
+    [Fact]
+    public void Read_ppu_state_exposes_authoritative_v_t_x_w_during_scroll_sequence()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x01,       // LDA #$01
+            0x8D, 0x00, 0x20, // STA $2000: t nametable = 1
+            0xA9, 0x2D,       // LDA #$2D
+            0x8D, 0x05, 0x20, // STA $2005: coarse X = 5, fine X = 5, w = 1
+            0xA9, 0x9A,       // LDA #$9A
+            0x8D, 0x05, 0x20, // STA $2005: fine Y = 2, coarse Y = 19, w = 0
+            0x4C, 0x0F, 0x80, // JMP $800F
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var firstScroll = session.StepInstruction(4);
+        var afterFirst = session.ReadPpuState();
+        var secondScroll = session.StepInstruction(2);
+        var afterSecond = session.ReadPpuState();
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(firstScroll.IsSuccess, firstScroll.Error?.Message);
+        Assert.True(afterFirst.IsSuccess, afterFirst.Error?.Message);
+        Assert.Equal("0x0000", afterFirst.Value.V);
+        Assert.Equal("0x0405", afterFirst.Value.T);
+        Assert.Equal(5, afterFirst.Value.X);
+        Assert.True(afterFirst.Value.W);
+        Assert.True(secondScroll.IsSuccess, secondScroll.Error?.Message);
+        Assert.True(afterSecond.IsSuccess, afterSecond.Error?.Message);
+        Assert.Equal("0x2665", afterSecond.Value.T);
+        Assert.Equal(5, afterSecond.Value.X);
+        Assert.False(afterSecond.Value.W);
+    }
+
+    [Fact]
+    public void Trace_ppu_register_writes_preserves_exact_order_and_authoritative_snapshots()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x81,       // $8000: LDA #$81
+            0x8D, 0x00, 0x20, // $8002: STA $2000
+            0xA9, 0x2D,       // $8005: LDA #$2D
+            0x8D, 0x05, 0x20, // $8007: STA $2005
+            0xA9, 0x9A,       // $800A: LDA #$9A
+            0x8D, 0x05, 0x20, // $800C: STA $2005
+            0xA9, 0x3F,       // $800F: LDA #$3F
+            0x8D, 0x06, 0x20, // $8011: STA $2006
+            0xA9, 0x20,       // $8014: LDA #$20
+            0x8D, 0x06, 0x20, // $8016: STA $2006
+            0xA9, 0x55,       // $8019: LDA #$55
+            0x8D, 0x07, 0x20, // $801B: STA $2007
+            0x4C, 0x1E, 0x80, // $801E: JMP $801E
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var breakpoint = session.SetBreakpoint(0x801E, null);
+        var trace = session.TracePpuRegisterWrites(new PpuRegisterTraceRequest(
+            1,
+            100,
+            PpuRegisterTracing.DefaultRegisters,
+            []));
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(breakpoint.IsSuccess, breakpoint.Error?.Message);
+        Assert.True(trace.IsSuccess, trace.Error?.Message);
+        Assert.Equal(1, trace.Value.FramesRequested);
+        Assert.Equal(0, trace.Value.FramesRun);
+        Assert.True(trace.Value.HitBreakpoint);
+        Assert.False(trace.Value.Truncated);
+        Assert.Equal(6, trace.Value.EventCount);
+        Assert.Equal(
+            ["0x2000", "0x2005", "0x2005", "0x2006", "0x2006", "0x2007"],
+            trace.Value.Events.Select(evt => evt.Address));
+        Assert.Equal(
+            ["0x81", "0x2D", "0x9A", "0x3F", "0x20", "0x55"],
+            trace.Value.Events.Select(evt => evt.Value));
+        Assert.Equal(
+            ["0x8002", "0x8007", "0x800C", "0x8011", "0x8016", "0x801B"],
+            trace.Value.Events.Select(evt => evt.Pc));
+        Assert.Equal(6, trace.Value.EventsObserved);
+        Assert.All(trace.Value.Events.Zip(trace.Value.Events.Skip(1)), pair =>
+        {
+            Assert.Equal((ulong)6, pair.Second.CpuCycle - pair.First.CpuCycle);
+            Assert.Equal((ulong)2, pair.Second.InstructionCounter - pair.First.InstructionCounter);
+        });
+        Assert.All(trace.Value.Events, evt =>
+        {
+            Assert.InRange(evt.Before.Scanline, 0, 261);
+            Assert.InRange(evt.Before.Dot, 0, 340);
+            Assert.Equal(evt.Before.Scanline, evt.After.Scanline);
+        });
+        Assert.Equal([1, 0, 0, 0, 0, 2], trace.Value.Events.Select(evt => evt.After.Dot - evt.Before.Dot));
+        Assert.Equal("0x0405", trace.Value.Events[2].Before.T);
+        Assert.Equal(5, trace.Value.Events[2].Before.X);
+        Assert.True(trace.Value.Events[2].Before.W);
+        Assert.Equal("0x2665", trace.Value.Events[3].Before.T);
+        Assert.False(trace.Value.Events[3].Before.W);
+        Assert.Equal("0x3F65", trace.Value.Events[3].After.T);
+        Assert.True(trace.Value.Events[3].After.W);
+        Assert.Equal("0x3F20", trace.Value.Events[4].After.T);
+        Assert.False(trace.Value.Events[4].After.W);
+        Assert.Equal(trace.Value.Timeline, trace.Value.FinalPpuState.Timeline);
+    }
+
+    [Fact]
+    public void Trace_ppu_register_writes_captures_vblank_and_reports_truncation_without_stopping_execution()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x01,       // $8000: LDA #$01
+            0x8D, 0x00, 0x20, // $8002: STA $2000
+            0x4C, 0x02, 0x80, // $8005: JMP $8002
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var full = session.TracePpuRegisterWrites(new PpuRegisterTraceRequest(
+            2,
+            PpuRegisterTracing.MaxEvents,
+            new HashSet<ushort> { 0x2000 },
+            []));
+        var limitedStartFrame = full.Value.Timeline.Frames;
+        var limited = session.TracePpuRegisterWrites(new PpuRegisterTraceRequest(
+            1,
+            3,
+            new HashSet<ushort> { 0x2000 },
+            []));
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(full.IsSuccess, full.Error?.Message);
+        Assert.Equal(2, full.Value.FramesRun);
+        Assert.False(full.Value.Truncated);
+        Assert.Equal(full.Value.EventCount, full.Value.EventsObserved);
+        Assert.Contains(full.Value.Events, evt => !evt.Before.VBlank);
+        Assert.Contains(full.Value.Events, evt => evt.Before.VBlank);
+        Assert.True(full.Value.Events.Zip(full.Value.Events.Skip(1)).All(pair => pair.First.CpuCycle < pair.Second.CpuCycle));
+        Assert.True(limited.IsSuccess, limited.Error?.Message);
+        Assert.Equal(1, limited.Value.FramesRun);
+        Assert.Equal(3, limited.Value.EventCount);
+        Assert.True(limited.Value.EventsObserved > limited.Value.EventCount);
+        Assert.True(limited.Value.Truncated);
+        Assert.Equal(limitedStartFrame + 1, limited.Value.Timeline.Frames);
+    }
+
+    [Fact]
+    public void Run_frame_preserves_full_frame_semantics_when_a_breakpoint_is_set()
+    {
+        using var temp = new TempRom(CreateMinimalMmc3());
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var registers = session.ReadRegisters();
+        var breakpoint = session.SetBreakpoint(Convert.ToUInt16(registers.Value.Pc[2..], 16), null);
+        var run = session.RunFrame(1);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(registers.IsSuccess, registers.Error?.Message);
+        Assert.True(breakpoint.IsSuccess, breakpoint.Error?.Message);
+        Assert.True(run.IsSuccess, run.Error?.Message);
+        Assert.Equal(1, run.Value.FramesRun);
+        Assert.False(run.Value.HitBreakpoint);
+        Assert.True(run.Value.Timeline.Instructions > 0);
+    }
+
+    [Fact]
+    public void Observe_execution_correlates_sustained_input_screen_ram_ppu_trace_and_nametables()
+    {
+        using var temp = new TempRom(CreateProgramMmc3(
+        [
+            0xA9, 0x01,       // $8000: LDA #$01
+            0x8D, 0x16, 0x40, // $8002: STA $4016 (strobe)
+            0xA9, 0x00,       // $8005: LDA #$00
+            0x8D, 0x16, 0x40, // $8007: STA $4016
+            0xAD, 0x16, 0x40, // $800A: read A
+            0xAD, 0x16, 0x40, // $800D: read B
+            0xAD, 0x16, 0x40, // $8010: read Select
+            0xAD, 0x16, 0x40, // $8013: read Start
+            0xAD, 0x16, 0x40, // $8016: read Up
+            0xAD, 0x16, 0x40, // $8019: read Down
+            0xAD, 0x16, 0x40, // $801C: read Left
+            0xAD, 0x16, 0x40, // $801F: read Right
+            0x29, 0x01,       // $8022: AND #$01
+            0xF0, 0x06,       // $8024: BEQ $802C
+            0xE6, 0x00,       // $8026: INC $00
+            0xD0, 0x02,       // $8028: BNE $802C
+            0xE6, 0x01,       // $802A: INC $01
+            0xA5, 0x00,       // $802C: LDA $00
+            0x8D, 0x00, 0x20, // $802E: STA $2000
+            0x4C, 0x00, 0x80, // $8031: JMP $8000
+        ]));
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var observation = session.ObserveExecution(new ExecutionObservationRequest(
+            2,
+            [NesButton.Right],
+            [new MemoryProbe(0x0000, 2)],
+            IncludePpuState: true,
+            TracePpuWrites: true,
+            MaxPpuEvents: 1,
+            PpuRegisterTracing.DefaultRegisters));
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(observation.IsSuccess, observation.Error?.Message);
+        Assert.Equal(2, observation.Value.FramesRun);
+        Assert.Equal(["right"], observation.Value.HeldButtons);
+        Assert.Equal(2, observation.Value.Frames.Count);
+        Assert.All(observation.Value.Frames, frame =>
+        {
+            Assert.StartsWith("sha256:", frame.Screen.Hash, StringComparison.Ordinal);
+            Assert.NotNull(frame.PpuState);
+            var memory = Assert.Single(frame.Memory);
+            Assert.Equal("0x0000", memory.Address);
+            Assert.Equal(2, memory.Length);
+        });
+        Assert.NotEqual("00 00", observation.Value.Frames[^1].Memory[0].BytesHex);
+        Assert.Single(observation.Value.PpuEvents);
+        Assert.All(observation.Value.PpuEvents, evt => Assert.Equal("0x2000", evt.Address));
+        Assert.True(observation.Value.PpuEventsObserved > observation.Value.PpuEventCount);
+        Assert.True(observation.Value.PpuTraceTruncated);
+        Assert.True(observation.Value.Truncated);
+        Assert.Equal(4, observation.Value.InitialNametables.Nametables.Count);
+        Assert.Equal(4, observation.Value.FinalNametables.Nametables.Count);
+        Assert.Empty(observation.Value.Released.Pressed);
+    }
+
+    [Fact]
+    public void Observe_execution_stops_before_running_when_current_pc_has_a_breakpoint()
+    {
+        using var temp = new TempRom(CreateMinimalMmc3());
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var breakpoint = session.SetBreakpoint(0x8000, null);
+        var observation = session.ObserveExecution(new ExecutionObservationRequest(
+            10,
+            [],
+            [],
+            IncludePpuState: false,
+            TracePpuWrites: true,
+            MaxPpuEvents: 10,
+            PpuRegisterTracing.DefaultRegisters));
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(breakpoint.IsSuccess, breakpoint.Error?.Message);
+        Assert.True(observation.IsSuccess, observation.Error?.Message);
+        Assert.True(observation.Value.HitBreakpoint);
+        Assert.Equal("breakpoint", observation.Value.StopReason);
+        Assert.Equal(0, observation.Value.FramesRun);
+        Assert.Empty(observation.Value.Frames);
+    }
+
     private static byte[] CreateMinimalMmc3()
     {
         return CreateProgramMmc3([0xA9, 0x42, 0xEA, 0x4C, 0x02, 0x80]);
     }
 
-    private static byte[] CreateProgramMmc3(byte[] program)
+    private static byte[] CreateProgramMmc3(byte[] program, byte flags6 = 0x40)
     {
         var rom = new byte[16 + 2 * 16 * 1024 + 8 * 1024];
         rom[0] = (byte)'N';
@@ -266,7 +613,7 @@ public sealed class AprNesDebugSessionTests
         rom[3] = 0x1A;
         rom[4] = 2;
         rom[5] = 1;
-        rom[6] = 0x40;
+        rom[6] = flags6;
 
         var prg = rom.AsSpan(16, 2 * 16 * 1024);
         program.CopyTo(prg);
@@ -274,6 +621,18 @@ public sealed class AprNesDebugSessionTests
         prg[0x7FFD] = 0x80;
         return rom;
     }
+
+    private static byte[] WritePpuByte(ushort address, byte value) =>
+    [
+        0xA9, (byte)(address >> 8), // LDA #high
+        0x8D, 0x06, 0x20,         // STA $2006
+        0xA9, (byte)address,       // LDA #low
+        0x8D, 0x06, 0x20,         // STA $2006
+        0xA9, value,               // LDA #value
+        0x8D, 0x07, 0x20,         // STA $2007
+    ];
+
+    private static string FirstByte(string row) => row.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
 
     private static byte[] CreateBankedMmc3()
     {
