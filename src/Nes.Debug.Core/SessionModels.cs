@@ -159,6 +159,22 @@ public sealed record SessionStateResult(
         : this(romLoaded, title, mapper, pc, totalFrames, new TimelineCounters((ulong)Math.Max(0, totalFrames), 0))
     {
     }
+
+    [JsonPropertyName("serverVersion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ServerVersion { get; init; }
+
+    [JsonPropertyName("backend")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Backend { get; init; }
+
+    [JsonPropertyName("backendVersion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BackendVersion { get; init; }
+
+    [JsonPropertyName("debugCycleLimit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? DebugCycleLimit { get; init; }
 }
 
 public sealed record NesCpuRegisters(

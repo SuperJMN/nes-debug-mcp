@@ -581,7 +581,12 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
                 mapper,
                 romLoaded ? Hex.FormatWord(NesCore.DebugReadRegisters().Pc) : null,
                 NesCore.frame_count,
-                GetTimeline()));
+                GetTimeline())
+            {
+                Backend = "AprNes",
+                BackendVersion = EmulatorBuildInfo.Version,
+                DebugCycleLimit = NesCore.DebugStepCpuCycleLimit,
+            });
     }
 
     public DebugResult<NesCpuRegisters> ReadRegisters()
