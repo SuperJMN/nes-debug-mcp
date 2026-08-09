@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Reflection;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Nes.Debug.Core;
@@ -20,6 +21,13 @@ public static class NesDebugTools
     private const int MaxInputTimelineFrames = 3600;
     private const int ScreenWidth = 256;
     private const int ScreenHeight = 240;
+
+    private static readonly string ServerVersion =
+        typeof(NesDebugTools).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion
+        ?? typeof(NesDebugTools).Assembly.GetName().Version?.ToString()
+        ?? "unknown";
 
     private static readonly IReadOnlyDictionary<string, NesButton> ButtonNames =
         new Dictionary<string, NesButton>(StringComparer.OrdinalIgnoreCase)
@@ -286,8 +294,14 @@ public static class NesDebugTools
     public static object ListWatchpoints(INesDebugSession session) => ToToolResult(session.ListWatchpoints());
 
     [McpServerTool(Name = "get_state", ReadOnly = true, Destructive = false)]
-    [Description("Returns ROM load status, ROM metadata, current PC, and frame count.")]
-    public static object GetState(INesDebugSession session) => ToToolResult(session.GetState());
+    [Description("Returns ROM load status, ROM metadata, runtime/backend versions, debug limits, current PC, and frame count.")]
+    public static object GetState(INesDebugSession session)
+    {
+        var state = session.GetState();
+        return state.IsSuccess
+            ? state.Value! with { ServerVersion = ServerVersion }
+            : new ToolError(state.Error!);
+    }
 
     [McpServerTool(Name = "read_registers", ReadOnly = true, Destructive = false)]
     [Description("Reads 6502 CPU registers from the active session.")]

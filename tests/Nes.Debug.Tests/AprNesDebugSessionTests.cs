@@ -43,6 +43,22 @@ public sealed class AprNesDebugSessionTests
     }
 
     [Fact]
+    public void Get_state_exposes_aprnes_runtime_diagnostics()
+    {
+        using var temp = new TempRom(CreateMinimalMmc3());
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var state = session.GetState();
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(state.IsSuccess, state.Error?.Message);
+        Assert.Equal("AprNes", state.Value.Backend);
+        Assert.False(string.IsNullOrWhiteSpace(state.Value.BackendVersion));
+        Assert.Equal(1024, state.Value.DebugCycleLimit);
+    }
+
+    [Fact]
     public void Save_state_and_load_state_restore_cpu_ram_and_registers()
     {
         using var temp = new TempRom(CreateMinimalMmc3());
@@ -512,6 +528,60 @@ public sealed class AprNesDebugSessionTests
     }
 
     [Fact]
+    public void Run_frame_advances_mmc3_oam_dma_workload_across_repeated_calls()
+    {
+        using var temp = new TempRom(CreateOamDmaMmc3());
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        for (var expectedFrame = 1; expectedFrame <= 60; expectedFrame++)
+        {
+            var run = session.RunFrame(1);
+
+            Assert.True(run.IsSuccess, run.Error?.Message);
+            Assert.Equal(1, run.Value.FramesRun);
+            Assert.Equal(expectedFrame, run.Value.TotalFrames);
+        }
+    }
+
+    [Fact]
+    public void Run_frame_advances_mmc3_oam_dma_workload_in_bounded_multi_frame_call()
+    {
+        using var temp = new TempRom(CreateOamDmaMmc3());
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var run = session.RunFrame(60);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.True(run.IsSuccess, run.Error?.Message);
+        Assert.Equal(60, run.Value.FramesRun);
+        Assert.Equal(60, run.Value.TotalFrames);
+    }
+
+    [Fact]
+    public void Run_frame_reports_actionable_context_when_instruction_never_completes()
+    {
+        using var temp = new TempRom(CreateProgramMmc3([0x02])); // HLT/JAM
+        using var session = new AprNesDebugSession();
+
+        var load = session.LoadRom(temp.Path);
+        var run = session.RunFrame(1);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.False(run.IsSuccess);
+        Assert.Equal("run_frame_failed", run.Error?.Code);
+        Assert.Contains("backend=AprNes", run.Error?.Message, StringComparison.Ordinal);
+        Assert.Contains("pc=0x8000", run.Error?.Message, StringComparison.Ordinal);
+        Assert.Contains("opcode=0x02", run.Error?.Message, StringComparison.Ordinal);
+        Assert.Contains("limit=1024 CPU cycles", run.Error?.Message, StringComparison.Ordinal);
+        Assert.Contains("oamDma=false", run.Error?.Message, StringComparison.Ordinal);
+        Assert.Contains("dmcDma=false", run.Error?.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Observe_execution_correlates_sustained_input_screen_ram_ppu_trace_and_nametables()
     {
         using var temp = new TempRom(CreateProgramMmc3(
@@ -602,6 +672,17 @@ public sealed class AprNesDebugSessionTests
     private static byte[] CreateMinimalMmc3()
     {
         return CreateProgramMmc3([0xA9, 0x42, 0xEA, 0x4C, 0x02, 0x80]);
+    }
+
+    private static byte[] CreateOamDmaMmc3()
+    {
+        return CreateProgramMmc3(
+        [
+            0xA9, 0x02,       // LDA #$02
+            0x8D, 0x14, 0x40, // STA $4014
+            0xE6, 0x00,       // INC $00
+            0x4C, 0x02, 0x80, // JMP $8002
+        ]);
     }
 
     private static byte[] CreateProgramMmc3(byte[] program, byte flags6 = 0x40)

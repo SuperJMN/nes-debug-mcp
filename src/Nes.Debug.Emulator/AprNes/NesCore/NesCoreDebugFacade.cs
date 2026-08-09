@@ -61,9 +61,10 @@ unsafe public partial class NesCore
 {
     private const int DebugScreenWidth = 256;
     private const int DebugScreenHeight = 240;
-    private const int MaxCpuCyclesPerInstruction = 64;
     private const int MaxCpuCyclesPerReset = 128;
     private const int MaxCpuCyclesPerFrame = 1_000_000;
+
+    public const int DebugStepCpuCycleLimit = 1024;
 
     private static ulong debugCpuCycles;
     private static bool debugTimingInitialized;
@@ -96,9 +97,10 @@ unsafe public partial class NesCore
 
     public static void DebugStepInstruction()
     {
-        debugCurrentInstructionPc = r_PC;
+        var instructionPc = r_PC;
+        debugCurrentInstructionPc = instructionPc;
         var observedBody = false;
-        for (var i = 0; i < MaxCpuCyclesPerInstruction; i++)
+        for (var i = 0; i < DebugStepCpuCycleLimit; i++)
         {
             StepCpuCycle();
             if (operationCycle != 0)
@@ -111,7 +113,12 @@ unsafe public partial class NesCore
             }
         }
 
-        throw new InvalidOperationException("Instruction did not complete within the debug cycle limit.");
+        var instructionOpcode = DebugPeekCpu(instructionPc);
+        throw new InvalidOperationException(
+            $"Debug CPU step did not complete (backend=AprNes, pc=0x{instructionPc:X4}, " +
+            $"opcode=0x{instructionOpcode:X2}, limit={DebugStepCpuCycleLimit} CPU cycles, " +
+            $"operationCycle={operationCycle}, oamDma={(spriteDmaTransfer ? "true" : "false")}, " +
+            $"dmcDma={(dmcDmaRunning ? "true" : "false")}).");
     }
 
     public static int DebugRunFrame()
@@ -145,6 +152,11 @@ unsafe public partial class NesCore
     }
 
     public static byte DebugReadCpu(ushort address) => CpuRead(address);
+
+    private static byte DebugPeekCpu(ushort address) =>
+        address < 0x2000
+            ? NES_MEM[address & 0x7FF]
+            : mem_read_page[address >> 13](address);
 
     public static void DebugWriteCpu(ushort address, byte value) => CpuWrite(address, value);
 

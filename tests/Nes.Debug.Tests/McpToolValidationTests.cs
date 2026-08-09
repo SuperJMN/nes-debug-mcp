@@ -101,6 +101,35 @@ public sealed class McpToolValidationTests
     }
 
     [Fact]
+    public void Get_state_adds_server_version_to_session_payload()
+    {
+        var session = new FakeDebugSession
+        {
+            GetStateResult = DebugResult<SessionStateResult>.Success(
+                new SessionStateResult(false, null, null, null, 0)
+                {
+                    Backend = "AprNes",
+                    BackendVersion = "test-build",
+                    DebugCycleLimit = 1024,
+                }),
+        };
+
+        var result = NesDebugTools.GetState(session);
+
+        var payload = Assert.IsType<SessionStateResult>(result);
+        Assert.False(string.IsNullOrWhiteSpace(payload.ServerVersion));
+        Assert.Equal("AprNes", payload.Backend);
+        Assert.Equal("test-build", payload.BackendVersion);
+        Assert.Equal(1024, payload.DebugCycleLimit);
+
+        var json = JsonSerializer.Serialize(payload);
+        Assert.Contains("\"serverVersion\":", json, StringComparison.Ordinal);
+        Assert.Contains("\"backend\":\"AprNes\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"backendVersion\":\"test-build\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"debugCycleLimit\":1024", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Set_controller_rejects_unknown_buttons_without_calling_session()
     {
         var session = new FakeDebugSession();

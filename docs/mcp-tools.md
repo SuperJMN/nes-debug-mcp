@@ -3,6 +3,7 @@
 All CPU addresses are 16-bit NES CPU addresses. Address strings accept `0xC000`, `$C000`, or `C000`.
 PPU tile dump tools use PPU addresses.
 Execution and state results include a `timeline` object with cumulative `frames`, CPU `cycles`, and `instructions` since the last ROM load, reset, or loaded savestate.
+`get_state` also reports `serverVersion`, the active `backend`, and `backendVersion`. Because ADNES and AprNes are vendored and locally integrated, `backendVersion` identifies the `Nes.Debug.Emulator` build that contains that source rather than an independent upstream package. AprNes additionally reports its `debugCycleLimit`.
 
 ## Execution
 
@@ -35,6 +36,8 @@ Execution and state results include a `timeline` object with cumulative `frames`
   ```json
   { "count": 1 }
   ```
+
+  AprNes debug stepping treats OAM and DMC DMA as legitimate CPU stalls. A single debugger step is bounded to 1,024 CPU cycles, which covers a complete OAM DMA before the next instruction executes. If that bound is genuinely exhausted, the error includes the backend, starting PC/opcode, configured limit, operation cycle, and active OAM/DMC DMA state.
 - `observe_screen`: atomically runs up to 600 complete frames and returns a SHA-256 identity for every rendered frame plus compact changes from the preceding frame. `changedPixels` and `changedBounds` locate the visible change; `changedTileRows` contains only affected 8x8 tile rows, where bit N in `mask` identifies tile column N.
   ```json
   { "frameCount": 120 }
@@ -113,7 +116,7 @@ Operators are `==`, `!=`, `<`, `<=`, `>`, and `>=`.
 
 ## Inspection
 
-- `get_state`: returns load status, mapper metadata, current PC, and total frame count.
+- `get_state`: returns load status, mapper metadata, current PC, total frame count, server/backend build identity, and the backend's debug-cycle limit when applicable.
 - `read_registers`: reads 6502 CPU registers.
 - `read_memory`: reads a bounded CPU memory range.
 - `write_memory`: writes bytes to CPU memory.

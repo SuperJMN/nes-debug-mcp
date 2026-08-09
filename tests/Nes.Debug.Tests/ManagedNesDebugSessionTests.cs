@@ -286,6 +286,9 @@ public sealed class ManagedNesDebugSessionTests
 
         Assert.True(load.IsSuccess, load.Error?.Message);
         Assert.True(initial.IsSuccess, initial.Error?.Message);
+        Assert.Equal("ADNES", initial.Value.Backend);
+        Assert.False(string.IsNullOrWhiteSpace(initial.Value.BackendVersion));
+        Assert.Null(initial.Value.DebugCycleLimit);
         Assert.Equal(0UL, initial.Value.Timeline.Frames);
         Assert.Equal(0UL, initial.Value.Timeline.Cycles);
         Assert.True(run.IsSuccess, run.Error?.Message);

@@ -686,7 +686,11 @@ public sealed class ManagedNesDebugSession : INesDebugSession, IPaletteIndexFram
                 mapper,
                 romLoaded ? Hex.FormatWord((ushort)Cpu.PC) : null,
                 totalFrames,
-                GetTimeline()));
+                GetTimeline())
+            {
+                Backend = "ADNES",
+                BackendVersion = EmulatorBuildInfo.Version,
+            });
     }
 
     public DebugResult<NesCpuRegisters> ReadRegisters()
