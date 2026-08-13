@@ -1660,8 +1660,8 @@ public sealed class AprNesDebugSession : INesDebugSession, IPaletteIndexFrameSou
         };
     }
 
-    private static DisassembledInstruction Instruction(ushort address, IReadOnlyList<byte> bytes, string text) =>
-        new(Hex.FormatWord(address), Hex.FormatBytes(bytes), text, null);
+    private DisassembledInstruction Instruction(ushort address, IReadOnlyList<byte> bytes, string text) =>
+        new(Hex.FormatWord(address), Hex.FormatBytes(bytes), text, symbols.ResolveAddress(address));
 
     private static NesCpuRegisters ToRegisters(NesCoreDebugRegisters registers) =>
         new(

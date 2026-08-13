@@ -159,7 +159,7 @@ namespace ADNES.PPU
                     if (index >= 0x800) index -= 0x800;
                     break;
                 case NametableMirroring.Horizontal:
-                    if (index > 0x800) index = (index - 0x800) % 0x400 + 0x400; // In the 2 B regions
+                    if (index >= 0x800) index = (index - 0x800) % 0x400 + 0x400; // In the 2 B regions
                     else index %= 0x400; // In one of the 2 A regions
                     break;
                 case NametableMirroring.SingleLower:
