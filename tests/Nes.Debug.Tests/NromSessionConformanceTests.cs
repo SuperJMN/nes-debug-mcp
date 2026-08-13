@@ -491,7 +491,7 @@ public abstract class NesDebugSessionConformanceTests<TSession>
         Assert.All(materialized.Zip(materialized.Skip(1)), pair => Assert.True(pair.First < pair.Second));
     }
 
-    private static void AssertSuccess<T>(DebugResult<T> result) =>
+    protected static void AssertSuccess<T>(DebugResult<T> result) =>
         Assert.True(result.IsSuccess, result.Error?.Message);
 
     private sealed record ObservableSnapshot(
@@ -565,7 +565,4 @@ public abstract class NromSessionConformanceTests<TSession> : NesDebugSessionCon
             : ["33", "44", "33", "44"];
         Assert.Equal(expectedTiles, nametables.Select(result => FirstByteFromRow(result.Value.Rows[0])));
     }
-
-    private static void AssertSuccess<T>(DebugResult<T> result) =>
-        Assert.True(result.IsSuccess, result.Error?.Message);
 }

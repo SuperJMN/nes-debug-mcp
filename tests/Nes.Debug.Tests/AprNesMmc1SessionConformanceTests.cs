@@ -374,9 +374,6 @@ public sealed class AprNesMmc1SessionConformanceTests : NesDebugSessionConforman
         }
     }
 
-    private static void AssertSuccess<T>(DebugResult<T> result) =>
-        Assert.True(result.IsSuccess, result.Error?.Message);
-
     private sealed record Mmc1Snapshot(
         string Registers,
         string Ppu,

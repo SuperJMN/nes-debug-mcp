@@ -99,7 +99,7 @@ namespace AprNes
 
         public byte MapperR_RPG(ushort address)
         {
-            if (PRG_Bankmode == 0 || PRG_Bankmode == 1) return PRG_ROM[(address - 0x8000) + ((PRG_Bankselect & 0xe) << 14)];//32k
+            if (PRG_Bankmode == 0 || PRG_Bankmode == 1) return PRG_ROM[(address - 0x8000) + ((PRG_Bankselect & 0xE) << 14)];//32k
             else if (PRG_Bankmode == 2)
             {
                 if (address < 0xc000) return PRG_ROM[address - 0x8000];//fixed
