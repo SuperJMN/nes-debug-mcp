@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\Nes.Debug.Core\Nes.Debug.Core.csproj" />
     <ProjectReference Include="..\..\src\Nes.Debug.Emulator\Nes.Debug.Emulator.csproj" />
     <ProjectReference Include="..\..\src\Nes.Debug.Mcp\Nes.Debug.Mcp.csproj" />
+    <ProjectReference Include="..\..\tools\Nes.Corpus.Qualification\Nes.Corpus.Qualification.csproj" />
   </ItemGroup>
 
 </Project>

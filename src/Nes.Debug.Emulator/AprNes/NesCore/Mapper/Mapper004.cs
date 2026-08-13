@@ -171,8 +171,8 @@ namespace AprNes
         {
             if (PRG_Bankmode == 0) //0: $8000-$9FFF swappable, $C000-$DFFF fixed to second-last bank;
             {
-                if (address < 0xa000) return PRG_ROM[(address - 0x8000) + (PRG0_Bankselect << 13)]; //$8000-$9FFF swap ok
-                else if (address < 0xc000) return PRG_ROM[(address - 0xa000) + (PRG1_Bankselect << 13)]; //$A000-$BFFF swap ok
+                if (address < 0xa000) return PRG_ROM[(address - 0x8000) + GetPrgBankOffset(PRG0_Bankselect)]; //$8000-$9FFF swap ok
+                else if (address < 0xc000) return PRG_ROM[(address - 0xa000) + GetPrgBankOffset(PRG1_Bankselect)]; //$A000-$BFFF swap ok
                 else if (address < 0xe000) return PRG_ROM[(address - 0xc000) + (((PRG_ROM_count << 1) - 2) << 13)]; //$C000-$DFFF fixed
                 else return PRG_ROM[(address - 0xe000) + (((PRG_ROM_count << 1) - 1) << 13)]; ;//$E000-$FFFF fixed
 
@@ -180,10 +180,23 @@ namespace AprNes
             else //1: $C000-$DFFF swappable, $8000-$9FFF fixed to second-last bank
             {
                 if (address < 0xa000) return PRG_ROM[(address - 0x8000) + (((PRG_ROM_count << 1) - 2) << 13)]; //$8000-$9FFF fixed
-                else if (address < 0xc000) return PRG_ROM[(address - 0xa000) + (PRG1_Bankselect << 13)]; //$A000-$BFFF swap ok
-                else if (address < 0xe000) return PRG_ROM[(address - 0xc000) + (PRG0_Bankselect << 13)]; //$C000-$DFFF swap ok
+                else if (address < 0xc000) return PRG_ROM[(address - 0xa000) + GetPrgBankOffset(PRG1_Bankselect)]; //$A000-$BFFF swap ok
+                else if (address < 0xe000) return PRG_ROM[(address - 0xc000) + GetPrgBankOffset(PRG0_Bankselect)]; //$C000-$DFFF swap ok
                 else return PRG_ROM[(address - 0xe000) + (((PRG_ROM_count << 1) - 1) << 13)];//$E000-$FFFF fixed
             }
+        }
+
+        private int GetPrgBankOffset(int bank)
+        {
+            int bankCount8k = PRG_ROM_count << 1;
+            // MMC3 R6/R7 expose six bank bits. Smaller physical ROMs mirror the selected page.
+            return (((bank & 0x3F) % bankCount8k) << 13);
+        }
+
+        private byte* GetChrBankPointer(int bank)
+        {
+            int bankCount1k = CHR_ROM_count << 3;
+            return CHR_ROM + ((bank % bankCount1k) << 10);
         }
 
         public void UpdateCHRBanks()
@@ -195,25 +208,25 @@ namespace AprNes
             }
             if (CHR_Bankmode == 0) // two 2KB at $0000-$0FFF, four 1KB at $1000-$1FFF
             {
-                NesCore.chrBankPtrs[0] = CHR_ROM + ((CHR0_Bankselect2k & 0xFE) << 10);
-                NesCore.chrBankPtrs[1] = CHR_ROM + ((CHR0_Bankselect2k | 1) << 10);
-                NesCore.chrBankPtrs[2] = CHR_ROM + ((CHR1_Bankselect2k & 0xFE) << 10);
-                NesCore.chrBankPtrs[3] = CHR_ROM + ((CHR1_Bankselect2k | 1) << 10);
-                NesCore.chrBankPtrs[4] = CHR_ROM + (CHR0_Bankselect1k << 10);
-                NesCore.chrBankPtrs[5] = CHR_ROM + (CHR1_Bankselect1k << 10);
-                NesCore.chrBankPtrs[6] = CHR_ROM + (CHR2_Bankselect1k << 10);
-                NesCore.chrBankPtrs[7] = CHR_ROM + (CHR3_Bankselect1k << 10);
+                NesCore.chrBankPtrs[0] = GetChrBankPointer(CHR0_Bankselect2k & 0xFE);
+                NesCore.chrBankPtrs[1] = GetChrBankPointer(CHR0_Bankselect2k | 1);
+                NesCore.chrBankPtrs[2] = GetChrBankPointer(CHR1_Bankselect2k & 0xFE);
+                NesCore.chrBankPtrs[3] = GetChrBankPointer(CHR1_Bankselect2k | 1);
+                NesCore.chrBankPtrs[4] = GetChrBankPointer(CHR0_Bankselect1k);
+                NesCore.chrBankPtrs[5] = GetChrBankPointer(CHR1_Bankselect1k);
+                NesCore.chrBankPtrs[6] = GetChrBankPointer(CHR2_Bankselect1k);
+                NesCore.chrBankPtrs[7] = GetChrBankPointer(CHR3_Bankselect1k);
             }
             else // four 1KB at $0000-$0FFF, two 2KB at $1000-$1FFF
             {
-                NesCore.chrBankPtrs[0] = CHR_ROM + (CHR0_Bankselect1k << 10);
-                NesCore.chrBankPtrs[1] = CHR_ROM + (CHR1_Bankselect1k << 10);
-                NesCore.chrBankPtrs[2] = CHR_ROM + (CHR2_Bankselect1k << 10);
-                NesCore.chrBankPtrs[3] = CHR_ROM + (CHR3_Bankselect1k << 10);
-                NesCore.chrBankPtrs[4] = CHR_ROM + ((CHR0_Bankselect2k & 0xFE) << 10);
-                NesCore.chrBankPtrs[5] = CHR_ROM + ((CHR0_Bankselect2k | 1) << 10);
-                NesCore.chrBankPtrs[6] = CHR_ROM + ((CHR1_Bankselect2k & 0xFE) << 10);
-                NesCore.chrBankPtrs[7] = CHR_ROM + ((CHR1_Bankselect2k | 1) << 10);
+                NesCore.chrBankPtrs[0] = GetChrBankPointer(CHR0_Bankselect1k);
+                NesCore.chrBankPtrs[1] = GetChrBankPointer(CHR1_Bankselect1k);
+                NesCore.chrBankPtrs[2] = GetChrBankPointer(CHR2_Bankselect1k);
+                NesCore.chrBankPtrs[3] = GetChrBankPointer(CHR3_Bankselect1k);
+                NesCore.chrBankPtrs[4] = GetChrBankPointer(CHR0_Bankselect2k & 0xFE);
+                NesCore.chrBankPtrs[5] = GetChrBankPointer(CHR0_Bankselect2k | 1);
+                NesCore.chrBankPtrs[6] = GetChrBankPointer(CHR1_Bankselect2k & 0xFE);
+                NesCore.chrBankPtrs[7] = GetChrBankPointer(CHR1_Bankselect2k | 1);
             }
         }
 
