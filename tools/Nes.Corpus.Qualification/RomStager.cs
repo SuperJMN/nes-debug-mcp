@@ -4,15 +4,23 @@ namespace Nes.Corpus.Qualification;
 
 internal sealed class StagedRom : IAsyncDisposable
 {
-    public StagedRom(string path)
+    private readonly TempArtifacts? owner;
+
+    public StagedRom(string path, TempArtifacts? owner = null)
     {
         Path = path;
+        this.owner = owner;
     }
 
     public string Path { get; }
 
     public bool TryDelete()
     {
+        if (owner is not null)
+        {
+            return owner.TryDeleteAll();
+        }
+
         try
         {
             File.Delete(Path);
@@ -50,9 +58,31 @@ internal static class RomStager
         int maximumImageBytes,
         TimeSpan timeout)
     {
-        var temporaryPath = CreateGenericPath();
+        var artifacts = TempArtifacts.Create();
         using var cancellation = new CancellationTokenSource(timeout);
-        return await StageAsync(candidate, temporaryPath, maximumImageBytes, cancellation.Token).ConfigureAwait(false);
+        var ownershipTransferred = false;
+        try
+        {
+            var result = await StageAsync(
+                candidate,
+                artifacts.ImagePath,
+                maximumImageBytes,
+                cancellation.Token).ConfigureAwait(false);
+            if (!result.IsSuccess)
+            {
+                return result;
+            }
+
+            ownershipTransferred = true;
+            return StagingResult.Success(new StagedRom(artifacts.ImagePath, artifacts));
+        }
+        finally
+        {
+            if (!ownershipTransferred)
+            {
+                _ = artifacts.TryDeleteAll();
+            }
+        }
     }
 
     internal static async Task<StagingResult> StageAsync(
@@ -65,13 +95,7 @@ internal static class RomStager
         try
         {
             await using var source = OpenSource(candidate.Source);
-            await using (var destination = new FileStream(
-                temporaryPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                BufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            await using (var destination = TempArtifacts.CreatePrivateFile(temporaryPath, asynchronous: true))
             {
                 var buffer = new byte[BufferSize];
                 var total = 0L;
@@ -118,10 +142,6 @@ internal static class RomStager
             }
         }
     }
-
-    internal static string CreateGenericPath() => System.IO.Path.Combine(
-        System.IO.Path.GetTempPath(),
-        $"nes-qualification-image-{Guid.NewGuid():N}.nes");
 
     private static Stream OpenSource(RomSource source)
     {

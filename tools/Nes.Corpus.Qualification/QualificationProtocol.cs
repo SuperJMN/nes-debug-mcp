@@ -105,6 +105,7 @@ public sealed record IndependentSmokeCoverage(
 
 public sealed record QualificationReport(
     int SchemaVersion,
+    bool Succeeded,
     int Discovered,
     int Valid,
     int Attempted,
@@ -122,7 +123,7 @@ public sealed record QualificationReport(
 
 public static class AggregateJson
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     private static readonly JsonSerializerOptions Options = new()
     {

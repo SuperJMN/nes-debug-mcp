@@ -53,7 +53,7 @@ public sealed class CorpusQualificationProtocolTests
         using var document = JsonDocument.Parse(first);
         Assert.Equal(
         [
-            "schemaVersion", "discovered", "valid", "attempted", "passed", "failed",
+            "schemaVersion", "succeeded", "discovered", "valid", "attempted", "passed", "failed",
             "headerMappers", "skipped", "failureCategories", "totalElapsedMilliseconds",
             "maximumRomElapsedMilliseconds", "backends", "bounds", "expected", "independentSmoke",
         ],
@@ -77,6 +77,7 @@ public sealed class CorpusQualificationProtocolTests
 
     private static QualificationReport CreateReport() => new(
         AggregateJson.SchemaVersion,
+        Succeeded: false,
         Discovered: 4,
         Valid: 3,
         Attempted: 3,

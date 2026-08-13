@@ -29,6 +29,7 @@ public sealed class QualificationCoordinatorTests
         var run = await QualificationCoordinator.RunAsync(options, CancellationToken.None);
 
         Assert.True(run.Succeeded, AggregateJson.Serialize(run.Report));
+        Assert.True(run.Report.Succeeded);
         Assert.Equal(4, run.Report.Valid);
         Assert.Equal(4, run.Report.Attempted);
         Assert.Equal(4, run.Report.Passed);
@@ -59,6 +60,7 @@ public sealed class QualificationCoordinatorTests
         var run = await QualificationCoordinator.RunAsync(options, CancellationToken.None);
 
         Assert.False(run.Succeeded);
+        Assert.False(run.Report.Succeeded);
         Assert.Equal(0, run.Report.Valid);
         Assert.Contains(run.Report.FailureCategories, failure =>
             failure.Category == FailureCategory.MissingCoverage && failure.HeaderMapper == 0);
@@ -67,17 +69,95 @@ public sealed class QualificationCoordinatorTests
     }
 
     [Fact]
+    public void Independent_representative_prefers_a_supported_image_of_the_requested_mapper()
+    {
+        RomCandidate[] candidates =
+        [
+            new(new RomSource.Direct("trainer"), new RomImageHeader(0, 16, true, NesImageFormat.INes), 16),
+            new(new RomSource.Direct("nes20"), new RomImageHeader(0, 16, false, NesImageFormat.Nes20), 16),
+            new(new RomSource.Direct("supported"), new RomImageHeader(0, 16, false, NesImageFormat.INes), 16),
+        ];
+
+        var selected = QualificationCoordinator.SelectIndependentCandidate(candidates, 0);
+
+        Assert.NotNull(selected);
+        Assert.Equal(NesImageFormat.INes, selected.Header.Format);
+        Assert.False(selected.Header.HasTrainer);
+    }
+
+    [Fact]
+    public async Task Missing_independent_representatives_fails_success_gate_when_aprnes_and_cohort_pass()
+    {
+        using var corpus = new TemporaryCorpus();
+        corpus.WriteDirect("only.nes", NromTestRomBuilder.CreateProgram(CreateObservableLoop()).Bytes);
+        var options = Options(corpus.Path, 1, new SortedDictionary<int, int> { [0] = 1 });
+
+        var run = await QualificationCoordinator.RunAsync(options, CancellationToken.None);
+
+        Assert.Equal(0, run.Report.Failed);
+        Assert.False(run.Report.Succeeded);
+        Assert.False(run.Succeeded);
+        Assert.DoesNotContain(run.Report.FailureCategories, failure => failure.HeaderMapper is null);
+        Assert.Contains(run.Report.FailureCategories, failure =>
+            failure is { Category: FailureCategory.MissingCoverage, HeaderMapper: 1 });
+    }
+
+    [Fact]
+    public async Task Trainer_and_nes20_candidates_are_attempted_and_fail_as_unsupported_without_being_skipped()
+    {
+        using var corpus = new TemporaryCorpus();
+        corpus.WriteDirect("trainer.nes", CreateUnsupportedImage(trainer: true, nes20: false));
+        corpus.WriteDirect("nes20.nes", CreateUnsupportedImage(trainer: false, nes20: true));
+        var options = Options(corpus.Path, 2, new SortedDictionary<int, int> { [4] = 2 }) with
+        {
+            // If the format guard launched MCP, this existing non-assembly would crash it.
+            ServerAssembly = System.IO.Path.Combine(corpus.Path, "trainer.nes"),
+        };
+
+        var run = await QualificationCoordinator.RunAsync(options, CancellationToken.None);
+
+        Assert.False(run.Succeeded);
+        Assert.False(run.Report.Succeeded);
+        Assert.Equal(2, run.Report.Valid);
+        Assert.Equal(2, run.Report.Attempted);
+        Assert.Equal(0, run.Report.Passed);
+        Assert.Equal(2, run.Report.Failed);
+        Assert.Empty(run.Report.Skipped);
+        Assert.Contains(run.Report.FailureCategories, failure =>
+            failure is { Category: FailureCategory.UnsupportedFormat, HeaderMapper: 4, Count: 2 });
+    }
+
+    [Fact]
     public void Parent_owned_generic_artifacts_are_deleted_without_exposing_their_paths()
     {
         var artifacts = TempArtifacts.Create();
-        File.WriteAllBytes(artifacts.ImagePath, [1]);
+        using (var image = TempArtifacts.CreatePrivateFile(artifacts.ImagePath, asynchronous: false))
+        {
+            image.WriteByte(1);
+        }
+
         File.WriteAllBytes(artifacts.StatePath, [2]);
+
+        Assert.True(Directory.Exists(artifacts.DirectoryPath));
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+                File.GetUnixFileMode(artifacts.DirectoryPath));
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                File.GetUnixFileMode(artifacts.ImagePath));
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                File.GetUnixFileMode(artifacts.StatePath));
+        }
 
         var deleted = artifacts.TryDeleteAll();
 
         Assert.True(deleted);
         Assert.False(File.Exists(artifacts.ImagePath));
         Assert.False(File.Exists(artifacts.StatePath));
+        Assert.False(Directory.Exists(artifacts.DirectoryPath));
     }
 
     private static QualificationOptions Options(
@@ -96,6 +176,20 @@ public sealed class QualificationCoordinatorTests
         program.AddRange(NromTestRomBuilder.PpuWrite(0x2005, 0x01));
         program.AddRange([0xE6, 0x00, 0x4C, 0x00, 0x80]);
         return program.ToArray();
+    }
+
+    private static byte[] CreateUnsupportedImage(bool trainer, bool nes20)
+    {
+        var bytes = new byte[16 + (trainer ? 512 : 0) + (16 * 1024) + (8 * 1024)];
+        bytes[0] = (byte)'N';
+        bytes[1] = (byte)'E';
+        bytes[2] = (byte)'S';
+        bytes[3] = 0x1A;
+        bytes[4] = 1;
+        bytes[5] = 1;
+        bytes[6] = (byte)(0x40 | (trainer ? 0x04 : 0));
+        bytes[7] = nes20 ? (byte)0x08 : (byte)0;
+        return bytes;
     }
 
     private static string FindServerAssembly()

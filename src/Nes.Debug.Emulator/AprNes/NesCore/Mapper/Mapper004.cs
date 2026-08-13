@@ -190,13 +190,19 @@ namespace AprNes
         {
             int bankCount8k = PRG_ROM_count << 1;
             // MMC3 R6/R7 expose six bank bits. Smaller physical ROMs mirror the selected page.
-            return (((bank & 0x3F) % bankCount8k) << 13);
+            return (NormalizeBankPage(bank, bankCount8k, 0x3F) << 13);
         }
 
         private byte* GetChrBankPointer(int bank)
         {
             int bankCount1k = CHR_ROM_count << 3;
-            return CHR_ROM + ((bank % bankCount1k) << 10);
+            return CHR_ROM + (NormalizeBankPage(bank, bankCount1k, 0xFF) << 10);
+        }
+
+        // Kept protected so MMC3 Rev A/MMC6 subclasses inherit the same physical-page policy.
+        protected static int NormalizeBankPage(int bank, int bankCount, int registerMask)
+        {
+            return (bank & registerMask) % bankCount;
         }
 
         public void UpdateCHRBanks()

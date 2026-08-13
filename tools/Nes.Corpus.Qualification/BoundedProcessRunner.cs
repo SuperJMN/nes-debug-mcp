@@ -16,11 +16,13 @@ internal sealed record BoundedProcessResult(
     byte[] StandardOutput,
     bool StandardOutputOverflow,
     bool StandardErrorOverflow,
+    bool CleanupTimedOut,
     long ElapsedMilliseconds);
 
 internal static class BoundedProcessRunner
 {
     private const int ErrorObservationLimit = 16 * 1024;
+    internal static readonly TimeSpan PostTerminationGrace = TimeSpan.FromSeconds(1);
 
     public static async Task<BoundedProcessResult> RunAsync(
         ProcessStartInfo startInfo,
@@ -31,6 +33,10 @@ internal static class BoundedProcessRunner
     {
         var stopwatch = Stopwatch.StartNew();
         Process? process = null;
+        Task<CaptureResult>? stdout = null;
+        Task<CaptureResult>? stderr = null;
+        Task? input = null;
+        Task? exit = null;
         try
         {
             startInfo.RedirectStandardOutput = true;
@@ -40,68 +46,91 @@ internal static class BoundedProcessRunner
             process = Process.Start(startInfo);
             if (process is null)
             {
-                return Result(ProcessCompletion.StartFailed, null, [], false, false, stopwatch);
+                return Result(ProcessCompletion.StartFailed, null, [], false, false, false, stopwatch);
             }
 
-            var stdout = DrainAsync(process.StandardOutput.BaseStream, standardOutputLimit, capture: true);
-            var stderr = DrainAsync(process.StandardError.BaseStream, ErrorObservationLimit, capture: false);
-            var input = SendInputAsync(process.StandardInput.BaseStream, standardInput);
+            stdout = DrainAsync(process.StandardOutput.BaseStream, standardOutputLimit, capture: true);
+            stderr = DrainAsync(process.StandardError.BaseStream, ErrorObservationLimit, capture: false);
+            input = SendInputAsync(process.StandardInput.BaseStream, standardInput);
+            exit = process.WaitForExitAsync(CancellationToken.None);
+            var completion = ProcessCompletion.Exited;
             try
             {
-                await process.WaitForExitAsync(cancellationToken).WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+                await exit.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
+                completion = ProcessCompletion.TimedOut;
                 KillTree(process);
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-                var timedOutStdout = await stdout.ConfigureAwait(false);
-                var timedOutStderr = await stderr.ConfigureAwait(false);
-                await IgnoreInputFailureAsync(input).ConfigureAwait(false);
-                return Result(
-                    ProcessCompletion.TimedOut,
-                    process.ExitCode,
-                    timedOutStdout.Bytes,
-                    timedOutStdout.Overflow,
-                    timedOutStderr.Overflow,
-                    stopwatch);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                completion = ProcessCompletion.Canceled;
                 KillTree(process);
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-                var canceledStdout = await stdout.ConfigureAwait(false);
-                var canceledStderr = await stderr.ConfigureAwait(false);
-                await IgnoreInputFailureAsync(input).ConfigureAwait(false);
-                return Result(
-                    ProcessCompletion.Canceled,
-                    process.ExitCode,
-                    canceledStdout.Bytes,
-                    canceledStdout.Overflow,
-                    canceledStderr.Overflow,
-                    stopwatch);
             }
 
-            var capturedStdout = await stdout.ConfigureAwait(false);
-            var capturedStderr = await stderr.ConfigureAwait(false);
-            await IgnoreInputFailureAsync(input).ConfigureAwait(false);
+            var cleanupCompleted = await WaitForTasksWithinGraceAsync(
+                [exit, stdout, stderr, input],
+                PostTerminationGrace).ConfigureAwait(false);
+            var capturedStdout = CompletedCapture(stdout);
+            var capturedStderr = CompletedCapture(stderr);
             return Result(
-                ProcessCompletion.Exited,
-                process.ExitCode,
+                completion,
+                TryGetExitCode(process),
                 capturedStdout.Bytes,
                 capturedStdout.Overflow,
                 capturedStderr.Overflow,
+                !cleanupCompleted,
                 stopwatch);
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
-            return Result(ProcessCompletion.StartFailed, null, [], false, false, stopwatch);
+            return Result(ProcessCompletion.StartFailed, null, [], false, false, false, stopwatch);
         }
         finally
         {
             if (process is not null)
             {
                 KillTree(process);
-                process.Dispose();
+                try
+                {
+                    process.Dispose();
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }
+
+            Observe(exit);
+            Observe(stdout);
+            Observe(stderr);
+            Observe(input);
+        }
+    }
+
+    internal static async Task<bool> WaitForTasksWithinGraceAsync(
+        IReadOnlyCollection<Task> tasks,
+        TimeSpan grace)
+    {
+        var all = Task.WhenAll(tasks);
+        try
+        {
+            await all.WaitAsync(grace, CancellationToken.None).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+        catch
+        {
+            return true;
+        }
+        finally
+        {
+            foreach (var task in tasks)
+            {
+                Observe(task);
             }
         }
     }
@@ -145,15 +174,37 @@ internal static class BoundedProcessRunner
         }
     }
 
-    private static async Task IgnoreInputFailureAsync(Task input)
+    private static CaptureResult CompletedCapture(Task<CaptureResult> task)
+    {
+        return task.IsCompletedSuccessfully
+            ? task.Result
+            : new CaptureResult([], Overflow: true);
+    }
+
+    private static int? TryGetExitCode(Process process)
     {
         try
         {
-            await input.ConfigureAwait(false);
+            return process.HasExited ? process.ExitCode : null;
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        catch (InvalidOperationException)
         {
+            return null;
         }
+    }
+
+    private static void Observe(Task? task)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        _ = task.ContinueWith(
+            completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private static BoundedProcessResult Result(
@@ -162,6 +213,7 @@ internal static class BoundedProcessRunner
         byte[] stdout,
         bool stdoutOverflow,
         bool stderrOverflow,
+        bool cleanupTimedOut,
         Stopwatch stopwatch)
     {
         stopwatch.Stop();
@@ -171,6 +223,7 @@ internal static class BoundedProcessRunner
             stdout,
             stdoutOverflow,
             stderrOverflow,
+            cleanupTimedOut,
             stopwatch.ElapsedMilliseconds);
     }
 

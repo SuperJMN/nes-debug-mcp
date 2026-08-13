@@ -71,7 +71,7 @@ internal static class QualificationCoordinator
         string? adnesServerVersion = null;
         foreach (var mapper in IndependentMappers)
         {
-            var candidate = discovery.Candidates.FirstOrDefault(item => item.Header.HeaderMapper == mapper);
+            var candidate = SelectIndependentCandidate(discovery.Candidates, mapper);
             if (candidate is null)
             {
                 failures.Add(FailureCategory.MissingCoverage, mapper);
@@ -126,8 +126,11 @@ internal static class QualificationCoordinator
             aprNesIdentities.Add(new BackendIdentity(QualificationBackend.AprNes, "unavailable", "unavailable"));
         }
 
+        var succeeded = failed == 0 && failures.Count == 0 &&
+            independentOutcomes.All(outcome => outcome is { Attempted: 1, Passed: 1, Failed: 0 });
         var report = new QualificationReport(
             AggregateJson.SchemaVersion,
+            succeeded,
             discovery.Discovered,
             discovery.Candidates.Count,
             attempted,
@@ -155,8 +158,7 @@ internal static class QualificationCoordinator
                 independentOutcomes.Sum(outcome => outcome.Passed),
                 independentOutcomes.Sum(outcome => outcome.Failed),
                 independentOutcomes));
-        return new QualificationRun(report, failed == 0 && failures.Count == 0 &&
-            independentOutcomes.All(outcome => outcome is { Attempted: 1, Passed: 1, Failed: 0 }));
+        return new QualificationRun(report, succeeded);
     }
 
     public static QualificationRun CreateClosedFailure(QualificationOptions options)
@@ -164,6 +166,7 @@ internal static class QualificationCoordinator
         var independent = IndependentMappers.Select(mapper => new MapperOutcome(mapper, 0, 0, 0)).ToArray();
         var report = new QualificationReport(
             AggregateJson.SchemaVersion,
+            false,
             0,
             0,
             0,
@@ -187,6 +190,13 @@ internal static class QualificationCoordinator
                 independent));
         return new QualificationRun(report, false);
     }
+
+    internal static RomCandidate? SelectIndependentCandidate(
+        IReadOnlyList<RomCandidate> candidates,
+        int headerMapper) => candidates.FirstOrDefault(candidate =>
+            candidate.Header.HeaderMapper == headerMapper &&
+            !candidate.Header.HasTrainer &&
+            candidate.Header.Format == NesImageFormat.INes);
 
     private static async Task<WorkerExecution> RunWorkerAsync(
         RomCandidate candidate,
@@ -252,12 +262,14 @@ internal static class QualificationCoordinator
         return new WorkerExecution(workerResult, elapsed);
     }
 
-    private static WorkerResult InterpretWorkerResult(
+    internal static WorkerResult InterpretWorkerResult(
         BoundedProcessResult process,
         int headerMapper,
         QualificationBackend backend)
     {
-        var category = process.StandardOutputOverflow || process.StandardErrorOverflow
+        var category = process.CleanupTimedOut
+            ? FailureCategory.WorkerTimeout
+            : process.StandardOutputOverflow
             ? FailureCategory.ProtocolViolation
             : process.Completion switch
             {

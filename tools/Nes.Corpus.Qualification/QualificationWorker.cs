@@ -23,29 +23,38 @@ internal static class QualificationWorker
                 return ClosedFailure(FailureCategory.ProtocolViolation, stopwatch);
             }
 
-            var candidate = new RomCandidate(ToSource(request), request.Header, request.ObservedBytes);
-            using var stagingCancellation = new CancellationTokenSource(
-                TimeSpan.FromSeconds(request.Bounds.StagingTimeoutSeconds));
-            var staging = await RomStager.StageAsync(
-                candidate,
-                request.StagingPath,
-                request.Bounds.MaxImageBytes,
-                stagingCancellation.Token).ConfigureAwait(false);
-            if (!staging.IsSuccess)
+            if (request.Header.HasTrainer || request.Header.Format == NesImageFormat.Nes20)
             {
-                failure = staging.FailureCategory ?? FailureCategory.Staging;
+                // Discovery deliberately counts structurally valid images. Reject formats whose
+                // offsets/extended sizes are not yet supported before any emulator is started.
+                failure = FailureCategory.UnsupportedFormat;
             }
             else
             {
-                smoke = await McpQualificationSmoke.RunAsync(
-                    request.ServerAssembly,
-                    staging.StagedRom!.Path,
-                    request.StatePath,
-                    request.Header.HeaderMapper,
-                    request.Backend,
-                    request.Bounds,
-                    CancellationToken.None).ConfigureAwait(false);
-                failure = MapValidFormatFailure(request.Header, smoke.FailureCategory);
+                var candidate = new RomCandidate(ToSource(request), request.Header, request.ObservedBytes);
+                using var stagingCancellation = new CancellationTokenSource(
+                    TimeSpan.FromSeconds(request.Bounds.StagingTimeoutSeconds));
+                var staging = await RomStager.StageAsync(
+                    candidate,
+                    request.StagingPath,
+                    request.Bounds.MaxImageBytes,
+                    stagingCancellation.Token).ConfigureAwait(false);
+                if (!staging.IsSuccess)
+                {
+                    failure = staging.FailureCategory ?? FailureCategory.Staging;
+                }
+                else
+                {
+                    smoke = await McpQualificationSmoke.RunAsync(
+                        request.ServerAssembly,
+                        staging.StagedRom!.Path,
+                        request.StatePath,
+                        request.Header.HeaderMapper,
+                        request.Backend,
+                        request.Bounds,
+                        CancellationToken.None).ConfigureAwait(false);
+                    failure = smoke.FailureCategory;
+                }
             }
         }
         catch (OperationCanceledException)
@@ -77,13 +86,6 @@ internal static class QualificationWorker
             smoke?.ServerVersion);
     }
 
-    private static FailureCategory? MapValidFormatFailure(RomImageHeader header, FailureCategory? failure) =>
-        failure.HasValue &&
-        failure.Value is FailureCategory.Load or FailureCategory.Identity &&
-        (header.HasTrainer || header.Format == NesImageFormat.Nes20)
-            ? FailureCategory.UnsupportedFormat
-            : failure;
-
     private static WorkerResult ClosedFailure(FailureCategory category, Stopwatch stopwatch)
     {
         stopwatch.Stop();
@@ -107,6 +109,7 @@ internal static class QualificationWorker
         File.Exists(request.ServerAssembly) &&
         TempArtifacts.IsGenericImagePath(request.StagingPath) &&
         TempArtifacts.IsGenericStatePath(request.StatePath) &&
+        TempArtifacts.AreInSamePrivateDirectory(request.StagingPath, request.StatePath) &&
         request.StagingPath != request.StatePath &&
         request.Bounds is
         {
@@ -170,41 +173,66 @@ internal static class QualificationWorker
     }
 }
 
-internal sealed record TempArtifacts(string ImagePath, string StatePath)
+internal sealed record TempArtifacts(string DirectoryPath, string ImagePath, string StatePath)
 {
-    private const string ImagePrefix = "nes-qualification-image-";
-    private const string StatePrefix = "nes-qualification-state-";
+    private const string DirectoryPrefix = "nes-qualification-run-";
+    private const string ImageName = "image.nes";
+    private const string StateName = "state.bin";
+    private const UnixFileMode PrivateDirectoryMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+    private const UnixFileMode PrivateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
-    public static TempArtifacts Create() => new(
-        RomStager.CreateGenericPath(),
-        Path.Combine(Path.GetTempPath(), $"{StatePrefix}{Guid.NewGuid():N}.state"));
+    public static TempArtifacts Create()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"{DirectoryPrefix}{Guid.NewGuid():N}");
+        var image = Path.Combine(directory, ImageName);
+        var state = Path.Combine(directory, StateName);
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                Directory.CreateDirectory(directory);
+            }
+            else
+            {
+                Directory.CreateDirectory(directory, PrivateDirectoryMode);
+                File.SetUnixFileMode(directory, PrivateDirectoryMode);
+            }
 
-    public bool TryDeleteAll() => TryDelete(ImagePath) & TryDelete(StatePath);
+            using (CreatePrivateFile(state, asynchronous: false))
+            {
+            }
 
-    public static bool IsGenericImagePath(string path) => IsGeneric(path, ImagePrefix, ".nes");
+            return new TempArtifacts(directory, image, state);
+        }
+        catch
+        {
+            TryDelete(image);
+            TryDelete(state);
+            TryDeleteDirectory(directory);
+            throw;
+        }
+    }
 
-    public static bool IsGenericStatePath(string path) => IsGeneric(path, StatePrefix, ".state");
+    public bool TryDeleteAll()
+    {
+        var filesDeleted = TryDelete(ImagePath) & TryDelete(StatePath);
+        return TryDeleteDirectory(DirectoryPath) & filesDeleted;
+    }
 
-    private static bool IsGeneric(string path, string prefix, string suffix)
+    public static bool IsGenericImagePath(string path) => IsGenericFile(path, ImageName);
+
+    public static bool IsGenericStatePath(string path) => IsGenericFile(path, StateName);
+
+    public static bool AreInSamePrivateDirectory(string imagePath, string statePath)
     {
         try
         {
-            var fullPath = Path.GetFullPath(path);
-            var tempRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
-            if (!string.Equals(Path.GetDirectoryName(fullPath), tempRoot, StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            var fileName = Path.GetFileName(fullPath);
-            if (!fileName.StartsWith(prefix, StringComparison.Ordinal) ||
-                !fileName.EndsWith(suffix, StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            var identifier = fileName[prefix.Length..^suffix.Length];
-            return identifier.Length == 32 && identifier.All(Uri.IsHexDigit);
+            var imageDirectory = Path.GetDirectoryName(Path.GetFullPath(imagePath));
+            var stateDirectory = Path.GetDirectoryName(Path.GetFullPath(statePath));
+            return imageDirectory is not null &&
+                   string.Equals(imageDirectory, stateDirectory, StringComparison.Ordinal) &&
+                   IsGenericDirectory(imageDirectory);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -212,11 +240,82 @@ internal sealed record TempArtifacts(string ImagePath, string StatePath)
         }
     }
 
+    internal static FileStream CreatePrivateFile(string path, bool asynchronous)
+    {
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+            Share = FileShare.None,
+            BufferSize = 64 * 1024,
+            Options = (asynchronous ? FileOptions.Asynchronous : FileOptions.None) |
+                FileOptions.SequentialScan,
+        };
+        if (!OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode = PrivateFileMode;
+        }
+
+        return new FileStream(path, options);
+    }
+
+    private static bool IsGenericFile(string path, string expectedName)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var directory = Path.GetDirectoryName(fullPath);
+            return directory is not null &&
+                   string.Equals(Path.GetFileName(fullPath), expectedName, StringComparison.Ordinal) &&
+                   IsGenericDirectory(directory);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsGenericDirectory(string path)
+    {
+        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var tempRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
+        if (!string.Equals(Path.GetDirectoryName(fullPath), tempRoot, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var name = Path.GetFileName(fullPath);
+        if (!name.StartsWith(DirectoryPrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var identifier = name[DirectoryPrefix.Length..];
+        return identifier.Length == 32 && identifier.All(Uri.IsHexDigit);
+    }
+
     private static bool TryDelete(string path)
     {
         try
         {
             File.Delete(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryDeleteDirectory(string path)
+    {
+        try
+        {
+            Directory.Delete(path, recursive: false);
+            return true;
+        }
+        catch (DirectoryNotFoundException)
+        {
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

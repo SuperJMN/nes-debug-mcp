@@ -6,6 +6,14 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args is ["test-child"])
+        {
+            return await QualificationTestChild.RunAsync(
+                Console.OpenStandardInput(),
+                Console.OpenStandardOutput(),
+                Console.OpenStandardError()).ConfigureAwait(false);
+        }
+
         if (args is ["worker"])
         {
             Console.SetError(TextWriter.Null);

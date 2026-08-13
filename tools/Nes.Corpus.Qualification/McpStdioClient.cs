@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 
@@ -34,8 +36,11 @@ internal sealed record McpImageCall(bool IsSuccess, string? MimeType, byte[] Dat
 
 internal sealed class McpStdioClient : IAsyncDisposable
 {
+    internal const string ProtocolVersion = "2025-06-18";
     private const int MaximumResponseBytes = 2 * 1024 * 1024;
     private const int MaximumMessagesPerResponse = 32;
+    private static readonly TimeSpan GracefulShutdownTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan CleanupGrace = TimeSpan.FromSeconds(1);
 
     private readonly Process process;
     private readonly Stream input;
@@ -89,12 +94,19 @@ internal sealed class McpStdioClient : IAsyncDisposable
             "initialize",
             new
             {
-                protocolVersion = "2025-06-18",
+                protocolVersion = ProtocolVersion,
                 capabilities = new { },
                 clientInfo = new { name = "nes-corpus-qualification", version = "1" },
             },
             cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccess || response.Payload.TryGetProperty("error", out _))
+        if (!response.IsSuccess ||
+            !response.Payload.TryGetProperty("result", out var result) ||
+            result.ValueKind != JsonValueKind.Object ||
+            !result.TryGetProperty("protocolVersion", out var protocolVersion) ||
+            protocolVersion.ValueKind != JsonValueKind.String ||
+            protocolVersion.GetString() != ProtocolVersion ||
+            !result.TryGetProperty("capabilities", out var capabilities) ||
+            capabilities.ValueKind != JsonValueKind.Object)
         {
             return false;
         }
@@ -180,19 +192,27 @@ internal sealed class McpStdioClient : IAsyncDisposable
         }
 
         stopRequested = true;
-        await CloseInputAsync(input).ConfigureAwait(false);
-        try
-        {
-            await process.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+        var closeInput = CloseInputAsync(input);
+        var waitForExit = WaitForExitAsync();
+        if (!await WaitForTasksWithinAsync(
+                [closeInput, waitForExit],
+                GracefulShutdownTimeout,
+                cancellationToken).ConfigureAwait(false))
         {
             KillTree();
-            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            _ = await WaitForTasksWithinAsync(
+                [closeInput, waitForExit, stderrDrain],
+                CleanupGrace,
+                CancellationToken.None).ConfigureAwait(false);
+            return false;
         }
 
-        await stderrDrain.ConfigureAwait(false);
-        return process.ExitCode == 0 && !output.Overflow;
+        if (!await WaitForTasksWithinAsync([stderrDrain], CleanupGrace, CancellationToken.None).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        return TryGetSuccessfulExit() && !output.Overflow;
     }
 
     public async ValueTask DisposeAsync()
@@ -204,19 +224,22 @@ internal sealed class McpStdioClient : IAsyncDisposable
 
         fullyDisposed = true;
         stopRequested = true;
-        await CloseInputAsync(input).ConfigureAwait(false);
+        var closeInput = CloseInputAsync(input);
         KillTree();
+        var waitForExit = WaitForExitAsync();
+        _ = await WaitForTasksWithinAsync(
+            [closeInput, waitForExit, stderrDrain],
+            CleanupGrace,
+            CancellationToken.None).ConfigureAwait(false);
+
         try
         {
-            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            process.Dispose();
         }
-        catch (InvalidOperationException)
+        catch
         {
+            // Reaping is best effort and bounded above.
         }
-
-        await stderrDrain.ConfigureAwait(false);
-
-        process.Dispose();
     }
 
     internal static async Task CloseInputAsync(Stream stream)
@@ -228,6 +251,56 @@ internal sealed class McpStdioClient : IAsyncDisposable
         catch
         {
             // Closing the request pipe is cleanup; process termination below remains authoritative.
+        }
+    }
+
+    private Task WaitForExitAsync()
+    {
+        try
+        {
+            return process.WaitForExitAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
+        }
+    }
+
+    private static async Task<bool> WaitForTasksWithinAsync(
+        IReadOnlyList<Task> tasks,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var all = Task.WhenAll(tasks);
+        try
+        {
+            await all.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            foreach (var task in tasks)
+            {
+                _ = task.ContinueWith(
+                    completed => _ = completed.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+
+            return false;
+        }
+    }
+
+    private bool TryGetSuccessfulExit()
+    {
+        try
+        {
+            return process.HasExited && process.ExitCode == 0;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return false;
         }
     }
 
@@ -262,14 +335,17 @@ internal sealed class McpStdioClient : IAsyncDisposable
             {
                 using var document = JsonDocument.Parse(line);
                 var root = document.RootElement;
-                if (root.ValueKind == JsonValueKind.Object &&
-                    root.TryGetProperty("id", out var responseId) &&
-                    responseId.ValueKind == JsonValueKind.Number &&
-                    responseId.TryGetInt32(out var actualId) &&
-                    actualId == id)
+                if (IsServerNotification(root))
                 {
-                    return new McpResponse(true, root.Clone(), McpCallFailure.None);
+                    continue;
                 }
+
+                if (!IsValidResponseEnvelope(root, id))
+                {
+                    return McpResponse.Failed(McpCallFailure.InvalidContent);
+                }
+
+                return new McpResponse(true, root.Clone(), McpCallFailure.None);
             }
             catch (JsonException)
             {
@@ -279,6 +355,36 @@ internal sealed class McpStdioClient : IAsyncDisposable
 
         return McpResponse.Failed(McpCallFailure.UnexpectedId);
     }
+
+    private static bool IsValidResponseEnvelope(JsonElement root, int expectedId)
+    {
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("jsonrpc", out var jsonRpc) ||
+            jsonRpc.ValueKind != JsonValueKind.String ||
+            jsonRpc.GetString() != "2.0" ||
+            !root.TryGetProperty("id", out var responseId) ||
+            responseId.ValueKind != JsonValueKind.Number ||
+            !responseId.TryGetInt32(out var actualId) ||
+            actualId != expectedId)
+        {
+            return false;
+        }
+
+        var hasResult = root.TryGetProperty("result", out _);
+        var hasError = root.TryGetProperty("error", out var error);
+        return hasResult != hasError && (!hasError || error.ValueKind == JsonValueKind.Object);
+    }
+
+    private static bool IsServerNotification(JsonElement root) =>
+        root.ValueKind == JsonValueKind.Object &&
+        root.TryGetProperty("jsonrpc", out var jsonRpc) &&
+        jsonRpc.ValueKind == JsonValueKind.String &&
+        jsonRpc.GetString() == "2.0" &&
+        root.TryGetProperty("method", out var method) &&
+        method.ValueKind == JsonValueKind.String &&
+        !root.TryGetProperty("id", out _) &&
+        !root.TryGetProperty("result", out _) &&
+        !root.TryGetProperty("error", out _);
 
     private async Task<McpCallFailure> ClassifyEndOfOutputAsync(CancellationToken cancellationToken)
     {
@@ -381,25 +487,167 @@ internal sealed class McpStdioClient : IAsyncDisposable
 internal static class PngValidator
 {
     public const int MaximumBytes = 1024 * 1024;
+    private const int Width = 256;
+    private const int Height = 240;
+    private const int MaximumDecodedBytes = Height * (Width * 4 + 1);
 
     private static ReadOnlySpan<byte> Signature => [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     public static bool IsNesFrame(ReadOnlySpan<byte> data)
     {
-        if (data.Length is < 33 or > MaximumBytes || !data[..8].SequenceEqual(Signature))
+        if (data.Length is < 57 or > MaximumBytes || !data[..8].SequenceEqual(Signature))
         {
             return false;
         }
 
-        var ihdrLength = ReadUInt32BigEndian(data[8..12]);
-        return ihdrLength == 13 &&
-               data[12..16].SequenceEqual("IHDR"u8) &&
-               ReadUInt32BigEndian(data[16..20]) == 256 &&
-               ReadUInt32BigEndian(data[20..24]) == 240;
+        var offset = Signature.Length;
+        var chunkIndex = 0;
+        var sawIdat = false;
+        var sawIend = false;
+        var idatSequenceEnded = false;
+        var bytesPerPixel = 0;
+        using var compressed = new MemoryStream();
+        while (offset < data.Length)
+        {
+            if (data.Length - offset < 12)
+            {
+                return false;
+            }
+
+            var length = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(offset, 4));
+            if (length > MaximumBytes || length > (uint)(data.Length - offset - 12))
+            {
+                return false;
+            }
+
+            var type = data.Slice(offset + 4, 4);
+            var payload = data.Slice(offset + 8, (int)length);
+            var storedCrc = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(offset + 8 + (int)length, 4));
+            if (CalculateCrc(type, payload) != storedCrc)
+            {
+                return false;
+            }
+
+            if (chunkIndex == 0)
+            {
+                if (!type.SequenceEqual("IHDR"u8) || !IsValidIhdr(payload))
+                {
+                    return false;
+                }
+
+                bytesPerPixel = payload[9] == 2 ? 3 : 4;
+            }
+            else if (type.SequenceEqual("IHDR"u8))
+            {
+                return false;
+            }
+
+            if (type.SequenceEqual("IDAT"u8))
+            {
+                if (sawIend || idatSequenceEnded)
+                {
+                    return false;
+                }
+
+                sawIdat = true;
+                compressed.Write(payload);
+            }
+            else if (type.SequenceEqual("IEND"u8))
+            {
+                if (length != 0 || !sawIdat || sawIend)
+                {
+                    return false;
+                }
+
+                sawIend = true;
+                offset += 12;
+                break;
+            }
+            else if (sawIdat)
+            {
+                idatSequenceEnded = true;
+            }
+
+            offset += 12 + (int)length;
+            chunkIndex++;
+        }
+
+        return sawIend && offset == data.Length && HasValidImageData(compressed.ToArray(), bytesPerPixel);
     }
 
-    private static uint ReadUInt32BigEndian(ReadOnlySpan<byte> bytes) =>
-        ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | bytes[3];
+    private static bool IsValidIhdr(ReadOnlySpan<byte> payload) =>
+        payload.Length == 13 &&
+        BinaryPrimitives.ReadUInt32BigEndian(payload[..4]) == Width &&
+        BinaryPrimitives.ReadUInt32BigEndian(payload.Slice(4, 4)) == Height &&
+        payload[8] == 8 &&
+        payload[9] is 2 or 6 &&
+        payload[10] == 0 &&
+        payload[11] == 0 &&
+        payload[12] == 0;
+
+    private static bool HasValidImageData(byte[] compressed, int bytesPerPixel)
+    {
+        try
+        {
+            using var source = new MemoryStream(compressed, writable: false);
+            using var zlib = new ZLibStream(source, CompressionMode.Decompress);
+            var decoded = new byte[MaximumDecodedBytes + 1];
+            var total = 0;
+            while (total < decoded.Length)
+            {
+                var read = zlib.Read(decoded, total, decoded.Length - total);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                total += read;
+            }
+
+            var expectedLength = Height * (Width * bytesPerPixel + 1);
+            if (total != expectedLength || zlib.ReadByte() != -1)
+            {
+                return false;
+            }
+
+            var rowLength = Width * bytesPerPixel + 1;
+            for (var row = 0; row < Height; row++)
+            {
+                if (decoded[row * rowLength] > 4)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private static uint CalculateCrc(ReadOnlySpan<byte> type, ReadOnlySpan<byte> payload)
+    {
+        var crc = 0xFFFFFFFFu;
+        crc = UpdateCrc(crc, type);
+        crc = UpdateCrc(crc, payload);
+        return crc ^ 0xFFFFFFFFu;
+    }
+
+    private static uint UpdateCrc(uint crc, ReadOnlySpan<byte> bytes)
+    {
+        foreach (var value in bytes)
+        {
+            crc ^= value;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                crc = (crc & 1) != 0 ? 0xEDB88320u ^ (crc >> 1) : crc >> 1;
+            }
+        }
+
+        return crc;
+    }
 }
 
 internal sealed class BoundedLineReader(Stream stream, int maximumBytes)

@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using System.Diagnostics;
+using System.IO.Compression;
 using Nes.Corpus.Qualification;
+using Nes.Debug.Core;
 
 namespace Nes.Debug.Tests;
 
@@ -36,7 +38,7 @@ public sealed class McpStdioClientTests
     [Fact]
     public async Task Client_drives_full_stdio_protocol_with_forced_backend_and_discards_hostile_stderr()
     {
-        var startInfo = StartPython(FakeServerScript);
+        var startInfo = QualificationTestChild.CreateMcpStartInfo("valid");
         await using var client = McpStdioClient.Start(startInfo, QualificationBackend.AprNes);
         Assert.NotNull(client);
 
@@ -60,12 +62,26 @@ public sealed class McpStdioClientTests
     [Fact]
     public async Task Client_rejects_oversize_server_stdout_as_a_protocol_violation()
     {
-        var startInfo = StartPython(
-            "import sys\n" +
-            "sys.stdin.readline()\n" +
-            "sys.stdout.write('x' * (2 * 1024 * 1024 + 1) + '\\n')\n" +
-            "sys.stdout.flush()\n" +
-            "sys.stdin.read()\n");
+        var startInfo = QualificationTestChild.CreateMcpStartInfo("oversize");
+        await using var client = McpStdioClient.Start(startInfo, QualificationBackend.AprNes);
+        Assert.NotNull(client);
+
+        Assert.False(await client.InitializeAsync(CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("missing-jsonrpc")]
+    [InlineData("wrong-jsonrpc")]
+    [InlineData("wrong-id")]
+    [InlineData("result-and-error")]
+    [InlineData("neither-result-nor-error")]
+    [InlineData("initialize-scalar")]
+    [InlineData("initialize-version-mismatch")]
+    [InlineData("initialize-capabilities-missing")]
+    [InlineData("initialize-capabilities-scalar")]
+    public async Task Client_rejects_invalid_json_rpc_initialize_envelopes(string mode)
+    {
+        var startInfo = QualificationTestChild.CreateMcpStartInfo(mode);
         await using var client = McpStdioClient.Start(startInfo, QualificationBackend.AprNes);
         Assert.NotNull(client);
 
@@ -75,14 +91,7 @@ public sealed class McpStdioClientTests
     [Fact]
     public async Task Client_distinguishes_a_server_crash_from_clean_end_of_output()
     {
-        var startInfo = StartPython(
-            "import json, sys\n" +
-            "message = json.loads(sys.stdin.readline())\n" +
-            "sys.stdout.write(json.dumps({'jsonrpc':'2.0','id':message['id'],'result':{'protocolVersion':'2025-06-18','capabilities':{}}}) + '\\n')\n" +
-            "sys.stdout.flush()\n" +
-            "sys.stdin.readline()\n" +
-            "sys.stdin.readline()\n" +
-            "sys.exit(23)\n");
+        var startInfo = QualificationTestChild.CreateMcpStartInfo("crash");
         await using var client = McpStdioClient.Start(startInfo, QualificationBackend.AprNes);
         Assert.NotNull(client);
 
@@ -102,15 +111,35 @@ public sealed class McpStdioClientTests
     [Fact]
     public async Task Stop_kills_a_server_that_stays_alive_after_input_closes()
     {
-        var startInfo = StartPython(HangingAfterInputScript);
+        var startInfo = QualificationTestChild.CreateMcpStartInfo("hang-after-input");
         await using var client = McpStdioClient.Start(startInfo, QualificationBackend.AprNes);
         Assert.NotNull(client);
         Assert.True(await client.InitializeAsync(CancellationToken.None));
         var response = await client.CallJsonAsync("pid", new { }, CancellationToken.None);
         Assert.True(response.IsSuccess);
         var processId = response.Payload.GetProperty("pid").GetInt32();
+        var stopwatch = Stopwatch.StartNew();
 
         Assert.False(await client.StopAsync(CancellationToken.None));
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5));
+        AssertProcessExited(processId);
+    }
+
+    [Fact]
+    public async Task Dispose_is_bounded_and_kills_a_server_that_ignores_closed_input()
+    {
+        var startInfo = QualificationTestChild.CreateMcpStartInfo("hang-after-input");
+        var client = McpStdioClient.Start(startInfo, QualificationBackend.AprNes);
+        Assert.NotNull(client);
+        Assert.True(await client.InitializeAsync(CancellationToken.None));
+        var response = await client.CallJsonAsync("pid", new { }, CancellationToken.None);
+        Assert.True(response.IsSuccess);
+        var processId = response.Payload.GetProperty("pid").GetInt32();
+        var stopwatch = Stopwatch.StartNew();
+
+        await client.DisposeAsync();
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3));
         AssertProcessExited(processId);
     }
 
@@ -120,39 +149,114 @@ public sealed class McpStdioClientTests
     [InlineData(256, 239, false)]
     public void Png_validation_requires_nes_dimensions(int width, int height, bool expected)
     {
-        var bytes = CreatePngHeader(width, height);
+        var bytes = PngEncoder.EncodeRgb24(new uint[width * height], width, height);
 
         Assert.Equal(expected, PngValidator.IsNesFrame(bytes));
     }
 
-    private static ProcessStartInfo StartPython(string script)
+    [Fact]
+    public void Png_validation_rejects_truncated_crc_corrupt_and_nonfinal_iend_images()
     {
-        var startInfo = new ProcessStartInfo("/usr/bin/python3");
-        startInfo.ArgumentList.Add("-c");
-        startInfo.ArgumentList.Add(script);
-        return startInfo;
+        var valid = PngEncoder.EncodeRgb24(new uint[256 * 240], 256, 240);
+        var crcCorrupt = (byte[])valid.Clone();
+        crcCorrupt[29] ^= 0x01;
+        var trailing = new byte[valid.Length + 1];
+        valid.CopyTo(trailing, 0);
+
+        Assert.True(PngValidator.IsNesFrame(valid));
+        Assert.False(PngValidator.IsNesFrame(valid[..^1]));
+        Assert.False(PngValidator.IsNesFrame(crcCorrupt));
+        Assert.False(PngValidator.IsNesFrame(trailing));
+
+        Assert.False(PngValidator.IsNesFrame(CreateInvalidFilterPng(valid)));
+        Assert.False(PngValidator.IsNesFrame(CreateReopenedIdatPng(valid)));
     }
 
-    private static byte[] CreatePngHeader(int width, int height)
+    private static int FindChunk(byte[] png, ReadOnlySpan<byte> type)
     {
-        var bytes = new byte[33];
-        byte[] signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        signature.CopyTo(bytes, 0);
-        bytes[11] = 13;
-        "IHDR"u8.CopyTo(bytes.AsSpan(12));
-        WriteUInt32BigEndian(bytes.AsSpan(16), (uint)width);
-        WriteUInt32BigEndian(bytes.AsSpan(20), (uint)height);
-        bytes[24] = 8;
-        bytes[25] = 2;
-        return bytes;
+        for (var offset = 8; offset <= png.Length - 12;)
+        {
+            var length = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(offset, 4));
+            if (png.AsSpan(offset + 4, 4).SequenceEqual(type))
+            {
+                return offset;
+            }
+
+            offset += 12 + length;
+        }
+
+        throw new InvalidDataException();
     }
 
-    private static void WriteUInt32BigEndian(Span<byte> destination, uint value)
+    private static byte[] CreateInvalidFilterPng(byte[] png)
     {
-        destination[0] = (byte)(value >> 24);
-        destination[1] = (byte)(value >> 16);
-        destination[2] = (byte)(value >> 8);
-        destination[3] = (byte)value;
+        var idatOffset = FindChunk(png, "IDAT"u8);
+        var idatLength = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(idatOffset, 4));
+        using var decoded = new MemoryStream();
+        using (var source = new MemoryStream(png, idatOffset + 8, idatLength, writable: false))
+        using (var zlib = new ZLibStream(source, CompressionMode.Decompress))
+        {
+            zlib.CopyTo(decoded);
+        }
+
+        decoded.GetBuffer()[0] = 5;
+        using var compressed = new MemoryStream();
+        using (var zlib = new ZLibStream(compressed, CompressionLevel.Optimal, leaveOpen: true))
+        {
+            zlib.Write(decoded.GetBuffer(), 0, (int)decoded.Length);
+        }
+
+        return RebuildPng(png, [compressed.ToArray()]);
+    }
+
+    private static byte[] CreateReopenedIdatPng(byte[] png)
+    {
+        var idatOffset = FindChunk(png, "IDAT"u8);
+        var idatLength = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(idatOffset, 4));
+        return RebuildPng(png, [png.AsSpan(idatOffset + 8, idatLength).ToArray(), null, []]);
+    }
+
+    private static byte[] RebuildPng(byte[] original, IReadOnlyList<byte[]?> idatParts)
+    {
+        using var rebuilt = new MemoryStream();
+        rebuilt.Write(original, 0, 8);
+        var ihdrOffset = FindChunk(original, "IHDR"u8);
+        var ihdrLength = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(original.AsSpan(ihdrOffset, 4));
+        rebuilt.Write(original, ihdrOffset, ihdrLength + 12);
+        foreach (var part in idatParts)
+        {
+            WriteChunk(rebuilt, part is null ? "tEXt"u8 : "IDAT"u8, part ?? []);
+        }
+
+        WriteChunk(rebuilt, "IEND"u8, []);
+        return rebuilt.ToArray();
+    }
+
+    private static void WriteChunk(Stream target, ReadOnlySpan<byte> type, ReadOnlySpan<byte> payload)
+    {
+        Span<byte> length = stackalloc byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, payload.Length);
+        target.Write(length);
+        target.Write(type);
+        target.Write(payload);
+        Span<byte> crc = stackalloc byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(crc, CalculateCrc(type, payload));
+        target.Write(crc);
+    }
+
+    private static uint CalculateCrc(ReadOnlySpan<byte> type, ReadOnlySpan<byte> payload)
+    {
+        var crc = 0xFFFFFFFFu;
+        foreach (var value in type.ToArray().Concat(payload.ToArray()))
+        {
+            crc ^= value;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                crc = (crc & 1) != 0 ? 0xEDB88320u ^ (crc >> 1) : crc >> 1;
+            }
+        }
+
+        return crc ^ 0xFFFFFFFFu;
     }
 
     private static void AssertProcessExited(int processId)
@@ -172,78 +276,4 @@ public sealed class McpStdioClientTests
         public override ValueTask DisposeAsync() => ValueTask.FromException(new IOException("synthetic"));
     }
 
-    private const string HangingAfterInputScript = """
-import json
-import os
-import sys
-import time
-
-for line in sys.stdin:
-    message = json.loads(line)
-    method = message['method']
-    if method == 'notifications/initialized':
-        continue
-    request_id = message['id']
-    if method == 'initialize':
-        result = {'protocolVersion': '2025-06-18', 'capabilities': {}}
-    else:
-        result = {'content': [{'type': 'text', 'text': json.dumps({'pid': os.getpid()})}]}
-    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': request_id, 'result': result}) + '\n')
-    sys.stdout.flush()
-
-time.sleep(30)
-""";
-
-    private const string FakeServerScript = """
-import base64
-import json
-import os
-import struct
-import sys
-
-sys.stderr.write('hostile-private-stderr\n')
-sys.stderr.flush()
-expected_id = 1
-initialized = False
-png = bytes([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-png += struct.pack('>I', 13) + b'IHDR' + struct.pack('>II', 256, 240)
-png += bytes([8, 2, 0, 0, 0]) + bytes(4)
-
-for line in sys.stdin:
-    message = json.loads(line)
-    method = message['method']
-    if method == 'notifications/initialized':
-        if not initialized:
-            raise RuntimeError('notification before initialize')
-        continue
-
-    request_id = message['id']
-    if request_id != expected_id:
-        raise RuntimeError('unexpected request id')
-    expected_id += 1
-
-    if method == 'initialize':
-        initialized = True
-        result = {'protocolVersion': '2025-06-18', 'capabilities': {}}
-    elif method == 'tools/call':
-        if not initialized:
-            raise RuntimeError('tool before initialize')
-        name = message['params']['name']
-        if name == 'backend':
-            content = {'type': 'text', 'text': json.dumps({'backend': os.environ.get('NES_MCP_EMULATOR_BACKEND')})}
-            result = {'content': [content]}
-        elif name == 'json':
-            result = {'content': [{'type': 'text', 'text': json.dumps({'value': 7})}]}
-        elif name == 'error':
-            result = {'isError': True, 'content': [{'type': 'text', 'text': json.dumps({'error': {'code': 'hostile'}})}]}
-        elif name == 'image':
-            result = {'content': [{'type': 'image', 'mimeType': 'image/png', 'data': base64.b64encode(png).decode()}]}
-        else:
-            raise RuntimeError('unknown tool')
-    else:
-        raise RuntimeError('unknown method')
-
-    sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': request_id, 'result': result}) + '\n')
-    sys.stdout.flush()
-""";
 }

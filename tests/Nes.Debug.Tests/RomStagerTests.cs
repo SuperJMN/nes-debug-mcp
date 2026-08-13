@@ -3,6 +3,7 @@ using Nes.Corpus.Qualification;
 
 namespace Nes.Debug.Tests;
 
+[Collection(NesDebugSessionCollection.Name)]
 public sealed class RomStagerTests
 {
     [Theory]
@@ -18,13 +19,16 @@ public sealed class RomStagerTests
 
         Assert.True(result.IsSuccess);
         var staged = result.StagedRom!;
+        var stagingDirectory = System.IO.Path.GetDirectoryName(staged.Path)!;
         Assert.True(File.Exists(staged.Path));
+        Assert.True(Directory.Exists(stagingDirectory));
         Assert.DoesNotContain("source", System.IO.Path.GetFileName(staged.Path), StringComparison.OrdinalIgnoreCase);
         Assert.False(System.IO.Path.GetFullPath(staged.Path).StartsWith(source.Path + System.IO.Path.DirectorySeparatorChar, StringComparison.Ordinal));
         Assert.Equal(bytes, await File.ReadAllBytesAsync(staged.Path));
 
         await staged.DisposeAsync();
         Assert.False(File.Exists(staged.Path));
+        Assert.False(Directory.Exists(stagingDirectory));
     }
 
     [Fact]
@@ -35,13 +39,15 @@ public sealed class RomStagerTests
         var candidate = source.CreateDirectCandidate(bytes);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        var before = CurrentStagingFiles();
+        var artifacts = TempArtifacts.Create();
 
-        var result = await RomStager.StageAsync(candidate, RomStager.CreateGenericPath(), bytes.Length, cancellation.Token);
+        var result = await RomStager.StageAsync(candidate, artifacts.ImagePath, bytes.Length, cancellation.Token);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(FailureCategory.StagingTimeout, result.FailureCategory);
-        Assert.Equal(before, CurrentStagingFiles());
+        Assert.False(File.Exists(artifacts.ImagePath));
+        Assert.True(artifacts.TryDeleteAll());
+        Assert.False(Directory.Exists(artifacts.DirectoryPath));
     }
 
     [Fact]
@@ -50,13 +56,12 @@ public sealed class RomStagerTests
         using var source = new TemporarySource();
         var candidate = source.CreateDirectCandidate(CreateImage());
         File.WriteAllBytes(((RomSource.Direct)candidate.Source).Path, [1, 2, 3]);
-        var before = CurrentStagingFiles();
-
+        var before = CurrentStagingDirectories();
         var result = await RomStager.StageAsync(candidate, 64 * 1024, TimeSpan.FromSeconds(2));
 
         Assert.False(result.IsSuccess);
         Assert.Equal(FailureCategory.Staging, result.FailureCategory);
-        Assert.Equal(before, CurrentStagingFiles());
+        Assert.Equal(before, CurrentStagingDirectories());
     }
 
     [Theory]
@@ -78,16 +83,16 @@ public sealed class RomStagerTests
             File.WriteAllBytes(sourcePath, bytes[..^1]);
         }
 
-        var before = CurrentStagingFiles();
+        var before = CurrentStagingDirectories();
         var result = await RomStager.StageAsync(candidate, 64 * 1024, TimeSpan.FromSeconds(2));
 
         Assert.False(result.IsSuccess);
         Assert.Equal(FailureCategory.Staging, result.FailureCategory);
-        Assert.Equal(before, CurrentStagingFiles());
+        Assert.Equal(before, CurrentStagingDirectories());
     }
 
-    private static string[] CurrentStagingFiles() => Directory
-        .GetFiles(System.IO.Path.GetTempPath(), "nes-qualification-image-*.nes")
+    private static string[] CurrentStagingDirectories() => Directory
+        .GetDirectories(System.IO.Path.GetTempPath(), "nes-qualification-run-*")
         .Order(StringComparer.Ordinal)
         .ToArray();
 

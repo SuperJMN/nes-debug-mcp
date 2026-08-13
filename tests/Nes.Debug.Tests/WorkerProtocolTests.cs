@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using Nes.Corpus.Qualification;
 
 namespace Nes.Debug.Tests;
@@ -50,32 +51,65 @@ public sealed class WorkerProtocolTests
     [Fact]
     public async Task Process_runner_bounds_and_discards_both_output_streams()
     {
-        var startInfo = Shell("printf '123456789'; printf 'secret-stderr' >&2");
+        var startInfo = QualificationTestChild.CreateStartInfo();
 
-        var result = await BoundedProcessRunner.RunAsync(startInfo, TimeSpan.FromSeconds(2), 4);
+        var result = await RunTestChildAsync(
+            startInfo,
+            new TestChildRequest("bounded-output", StandardOutputBytes: 9, StandardErrorBytes: 13),
+            TimeSpan.FromSeconds(2),
+            4);
 
         Assert.Equal(ProcessCompletion.Exited, result.Completion);
-        Assert.Equal("1234", Encoding.UTF8.GetString(result.StandardOutput));
+        Assert.Equal("oooo", Encoding.UTF8.GetString(result.StandardOutput));
         Assert.True(result.StandardOutputOverflow);
         Assert.False(result.StandardErrorOverflow);
+    }
+
+    [Fact]
+    public void Drained_stderr_overflow_does_not_turn_a_valid_worker_result_into_a_failure()
+    {
+        var worker = new WorkerResult(
+            WorkerProtocol.SchemaVersion,
+            true,
+            null,
+            0,
+            1,
+            QualificationBackend.AprNes,
+            "backend",
+            "server");
+        var process = new BoundedProcessResult(
+            ProcessCompletion.Exited,
+            0,
+            Encoding.UTF8.GetBytes(WorkerProtocol.SerializeResult(worker)),
+            StandardOutputOverflow: false,
+            StandardErrorOverflow: true,
+            CleanupTimedOut: false,
+            ElapsedMilliseconds: 1);
+
+        var result = QualificationCoordinator.InterpretWorkerResult(
+            process,
+            headerMapper: 0,
+            QualificationBackend.AprNes);
+
+        Assert.True(result.Passed);
+        Assert.Null(result.FailureCategory);
     }
 
     [Fact]
     public async Task Worker_descriptor_is_delivered_only_through_stdin_with_constant_arguments()
     {
         const string secret = "private-source-descriptor";
-        var startInfo = Shell("IFS= read -r payload; test \"${#payload}\" -eq 25; printf '%s' \"$0\"");
-        startInfo.ArgumentList.Add("worker");
+        var startInfo = QualificationTestChild.CreateStartInfo();
 
-        var result = await BoundedProcessRunner.RunAsync(
+        var result = await RunTestChildAsync(
             startInfo,
+            new TestChildRequest("constant-args", secret),
             TimeSpan.FromSeconds(2),
-            64,
-            Encoding.UTF8.GetBytes(secret + "\n"));
+            64);
 
         Assert.Equal(ProcessCompletion.Exited, result.Completion);
         Assert.Equal(0, result.ExitCode);
-        Assert.Equal("worker", Encoding.UTF8.GetString(result.StandardOutput));
+        Assert.Equal("test-child", JsonDocument.Parse(result.StandardOutput).RootElement.GetProperty("argument").GetString());
         Assert.All(startInfo.ArgumentList, argument => Assert.DoesNotContain(secret, argument, StringComparison.Ordinal));
         Assert.DoesNotContain(secret, Encoding.UTF8.GetString(result.StandardOutput), StringComparison.Ordinal);
     }
@@ -83,54 +117,57 @@ public sealed class WorkerProtocolTests
     [Fact]
     public async Task Process_runner_enforces_a_real_wall_timeout()
     {
-        var startInfo = Shell("sleep 30");
+        var startInfo = QualificationTestChild.CreateStartInfo();
 
-        var result = await BoundedProcessRunner.RunAsync(startInfo, TimeSpan.FromMilliseconds(100), 32);
+        var result = await RunTestChildAsync(
+            startInfo,
+            new TestChildRequest("hang"),
+            TimeSpan.FromMilliseconds(100),
+            32);
 
         Assert.Equal(ProcessCompletion.TimedOut, result.Completion);
-        Assert.InRange(result.ElapsedMilliseconds, 0, 5000);
+        Assert.InRange(result.ElapsedMilliseconds, 0, 2500);
     }
 
     [Fact]
     public async Task Process_runner_kills_a_real_grandchild_on_timeout()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        var startInfo = QualificationTestChild.CreateStartInfo();
 
-        var pidFile = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"nes-worker-grandchild-{Guid.NewGuid():N}.pid");
-        try
-        {
-            var startInfo = Shell($"sleep 30 & child=$!; printf '%s' \"$child\" > '{pidFile}'; wait");
+        var result = await RunTestChildAsync(
+            startInfo,
+            new TestChildRequest("spawn-grandchild"),
+            TimeSpan.FromMilliseconds(750),
+            128);
 
-            var result = await BoundedProcessRunner.RunAsync(startInfo, TimeSpan.FromMilliseconds(500), 32);
-
-            Assert.Equal(ProcessCompletion.TimedOut, result.Completion);
-            var grandchildPid = int.Parse(await File.ReadAllTextAsync(pidFile), System.Globalization.CultureInfo.InvariantCulture);
-            await AssertProcessExitedAsync(grandchildPid);
-        }
-        finally
-        {
-            File.Delete(pidFile);
-        }
+        Assert.Equal(ProcessCompletion.TimedOut, result.Completion);
+        var grandchildPid = JsonDocument.Parse(result.StandardOutput).RootElement.GetProperty("processId").GetInt32();
+        await AssertProcessExitedAsync(grandchildPid);
     }
 
-    private static ProcessStartInfo Shell(string command)
+    [Fact]
+    public async Task Post_kill_grace_returns_when_exit_and_stream_tasks_never_complete()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            var windows = new ProcessStartInfo("cmd.exe");
-            windows.ArgumentList.Add("/c");
-            windows.ArgumentList.Add(command);
-            return windows;
-        }
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopwatch = Stopwatch.StartNew();
 
-        var unix = new ProcessStartInfo("/bin/sh");
-        unix.ArgumentList.Add("-c");
-        unix.ArgumentList.Add(command);
-        return unix;
+        var completed = await BoundedProcessRunner.WaitForTasksWithinGraceAsync(
+            [never.Task, never.Task, never.Task],
+            TimeSpan.FromMilliseconds(100));
+
+        Assert.False(completed);
+        Assert.InRange(stopwatch.ElapsedMilliseconds, 50, 1000);
     }
+
+    private static Task<BoundedProcessResult> RunTestChildAsync(
+        ProcessStartInfo startInfo,
+        TestChildRequest request,
+        TimeSpan timeout,
+        int outputLimit) => BoundedProcessRunner.RunAsync(
+            startInfo,
+            timeout,
+            outputLimit,
+            JsonSerializer.SerializeToUtf8Bytes(request));
 
     private static async Task AssertProcessExitedAsync(int processId)
     {
@@ -169,6 +206,7 @@ public sealed class WorkerProtocolTests
 
     private static QualificationReport CreateReport() => new(
         AggregateJson.SchemaVersion,
+        true,
         1,
         1,
         1,
