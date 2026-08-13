@@ -3,8 +3,13 @@ using Nes.Debug.Emulator;
 
 namespace Nes.Debug.Tests;
 
-public sealed class AprNesDebugSessionTests
+[Collection(NesDebugSessionCollection.Name)]
+public sealed class AprNesDebugSessionTests : NromSessionConformanceTests<AprNesDebugSession>
 {
+    protected override AprNesDebugSession CreateSession() => new();
+
+    protected override bool SupportsContinuousObservation => true;
+
     [Fact]
     public void Load_rom_accepts_mapper4_and_steps_instruction()
     {

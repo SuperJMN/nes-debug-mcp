@@ -4,8 +4,11 @@ using System.Text.Json;
 
 namespace Nes.Debug.Tests;
 
-public sealed class ManagedNesDebugSessionTests
+[Collection(NesDebugSessionCollection.Name)]
+public sealed class ManagedNesDebugSessionTests : NromSessionConformanceTests<ManagedNesDebugSession>
 {
+    protected override ManagedNesDebugSession CreateSession() => new();
+
     [Fact]
     public void Load_rom_resets_to_ines_reset_vector_and_steps_instruction()
     {
