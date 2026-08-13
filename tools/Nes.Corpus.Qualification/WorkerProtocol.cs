@@ -10,7 +10,15 @@ internal enum WorkerSourceKind
     ZipEntry,
 }
 
+[JsonConverter(typeof(JsonStringEnumConverter<QualificationLaunchMode>))]
+internal enum QualificationLaunchMode
+{
+    PrimaryDefault,
+    Adnes,
+}
+
 internal sealed record WorkerRequest(
+    int SchemaVersion,
     WorkerSourceKind SourceKind,
     string SourcePath,
     int? EntryIndex,
@@ -19,7 +27,7 @@ internal sealed record WorkerRequest(
     string StagingPath,
     string StatePath,
     string ServerAssembly,
-    QualificationBackend Backend,
+    QualificationLaunchMode LaunchMode,
     QualificationBounds Bounds);
 
 internal sealed record WorkerResult(
@@ -34,7 +42,7 @@ internal sealed record WorkerResult(
 
 internal static class WorkerProtocol
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
     public const int MaximumResultBytes = 16 * 1024;
 
     private static readonly JsonSerializerOptions Options = new()
@@ -55,7 +63,12 @@ internal static class WorkerProtocol
         try
         {
             request = JsonSerializer.Deserialize<WorkerRequest>(utf8, Options);
-            return request is not null && request.ObservedBytes >= 16 && request.EntryIndex is null or >= 0;
+            return request is not null &&
+                   request.SchemaVersion == SchemaVersion &&
+                   Enum.IsDefined(request.SourceKind) &&
+                   Enum.IsDefined(request.LaunchMode) &&
+                   request.ObservedBytes >= 16 &&
+                   request.EntryIndex is null or >= 0;
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {

@@ -21,6 +21,23 @@ public sealed class WorkerProtocolTests
     }
 
     [Fact]
+    public void Worker_request_rejects_missing_old_and_unknown_launch_mode_contracts()
+    {
+        var request = CreateRequest();
+        using var valid = JsonDocument.Parse(WorkerProtocol.SerializeRequest(request));
+        var root = valid.RootElement;
+        var withoutSchema = root.EnumerateObject()
+            .Where(property => property.Name != "schemaVersion")
+            .ToDictionary(property => property.Name, property => property.Value.Clone());
+        var oldSchema = request with { SchemaVersion = 1 };
+        var unknownLaunch = request with { LaunchMode = (QualificationLaunchMode)99 };
+
+        Assert.False(WorkerProtocol.TryDeserializeRequest(JsonSerializer.SerializeToUtf8Bytes(withoutSchema), out _));
+        Assert.False(WorkerProtocol.TryDeserializeRequest(WorkerProtocol.SerializeRequest(oldSchema), out _));
+        Assert.False(WorkerProtocol.TryDeserializeRequest(WorkerProtocol.SerializeRequest(unknownLaunch), out _));
+    }
+
+    [Fact]
     public void Worker_result_rejects_hostile_versions_and_inconsistent_status()
     {
         var hostile = new WorkerResult(
@@ -193,6 +210,7 @@ public sealed class WorkerProtocolTests
     }
 
     private static WorkerRequest CreateRequest() => new(
+        WorkerProtocol.SchemaVersion,
         WorkerSourceKind.Direct,
         "source.nes",
         null,
@@ -201,7 +219,7 @@ public sealed class WorkerProtocolTests
         "staging.nes",
         "state.tmp",
         "server.dll",
-        QualificationBackend.AprNes,
+        QualificationLaunchMode.PrimaryDefault,
         new QualificationBounds(30, 10, 1024 * 1024, 4, 10000, 128));
 
     private static QualificationReport CreateReport() => new(

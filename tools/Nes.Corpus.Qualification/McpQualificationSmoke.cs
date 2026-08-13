@@ -35,22 +35,28 @@ internal static class McpQualificationSmoke
         string romPath,
         string statePath,
         int headerMapper,
-        QualificationBackend backend,
+        QualificationLaunchMode launchMode,
         QualificationBounds bounds,
         CancellationToken cancellationToken)
     {
-        await using var client = McpStdioClient.Start(serverAssembly, backend);
+        await using var client = McpStdioClient.Start(serverAssembly, launchMode);
         if (client is null)
         {
             return SmokeResult.Failure(FailureCategory.WorkerCrash);
         }
 
+        var expectedBackend = launchMode switch
+        {
+            QualificationLaunchMode.PrimaryDefault => QualificationBackend.AprNes,
+            QualificationLaunchMode.Adnes => QualificationBackend.Adnes,
+            _ => throw new ArgumentOutOfRangeException(nameof(launchMode)),
+        };
         var result = await RunCoreAsync(
             client,
             romPath,
             statePath,
             headerMapper,
-            backend,
+            expectedBackend,
             bounds,
             cancellationToken).ConfigureAwait(false);
 

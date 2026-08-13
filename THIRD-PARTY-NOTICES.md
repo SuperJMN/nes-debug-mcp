@@ -12,7 +12,7 @@
 - License: MIT
 - License file: `src/Nes.Debug.Emulator/ADNES-LICENSE.txt`
 
-ADNES is still included in the current package. The `auto` backend uses it for mappers 0, 1, 2, and 3, and it can also be selected explicitly with `NES_MCP_EMULATOR_BACKEND=adnes`.
+ADNES is still included in the current package, with its source and license intact, as a temporary explicit fallback selected with `NES_MCP_EMULATOR_BACKEND=adnes`. The default, legacy `auto`, and explicit `aprnes` paths use AprNes directly for every supported mapper.
 
 ### AprNes
 

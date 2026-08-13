@@ -1,5 +1,7 @@
+using System.Text.Json;
 using Nes.Debug.Core;
 using Nes.Debug.Emulator;
+using Nes.Debug.Mcp;
 
 namespace Nes.Debug.Tests;
 
@@ -584,6 +586,31 @@ public sealed class AprNesDebugSessionTests : NromSessionConformanceTests<AprNes
         Assert.Contains("limit=1024 CPU cycles", run.Error?.Message, StringComparison.Ordinal);
         Assert.Contains("oamDma=false", run.Error?.Message, StringComparison.Ordinal);
         Assert.Contains("dmcDma=false", run.Error?.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Mcp_run_frame_failure_serializes_aprnes_build_server_and_debug_limit_diagnostics()
+    {
+        using var temp = new TempRom(CreateProgramMmc3([0x02])); // HLT/JAM
+        using var session = new AprNesDebugSession();
+        var load = session.LoadRom(temp.Path);
+
+        var result = NesDebugTools.RunFrame(session, 1);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("run_frame_failed", error.Error.Code);
+        Assert.NotNull(error.Diagnostics);
+        Assert.Equal("AprNes", error.Diagnostics.Backend);
+        Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.BackendVersion));
+        Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.ServerVersion));
+        Assert.Equal(1024, error.Diagnostics.DebugCycleLimit);
+
+        var json = JsonSerializer.Serialize(error);
+        Assert.Contains("\"backend\":\"AprNes\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"backendVersion\":", json, StringComparison.Ordinal);
+        Assert.Contains("\"serverVersion\":", json, StringComparison.Ordinal);
+        Assert.Contains("\"debugCycleLimit\":1024", json, StringComparison.Ordinal);
     }
 
     [Fact]

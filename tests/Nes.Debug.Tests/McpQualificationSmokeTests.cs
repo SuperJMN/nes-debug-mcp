@@ -6,10 +6,13 @@ namespace Nes.Debug.Tests;
 public sealed class McpQualificationSmokeTests
 {
     [Theory]
-    [InlineData(QualificationBackend.AprNes)]
-    [InlineData(QualificationBackend.Adnes)]
-    public async Task Generated_nrom_passes_the_real_stdio_smoke(QualificationBackend backend)
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Generated_nrom_passes_the_real_stdio_smoke(bool primaryDefault)
     {
+        var launchMode = primaryDefault
+            ? QualificationLaunchMode.PrimaryDefault
+            : QualificationLaunchMode.Adnes;
         var program = new List<byte>();
         program.AddRange(NromTestRomBuilder.PpuWrite(0x2000, 0x80));
         program.AddRange(NromTestRomBuilder.PpuWrite(0x2005, 0x01));
@@ -23,7 +26,7 @@ public sealed class McpQualificationSmokeTests
             rom.Path,
             rom.Path + ".state",
             headerMapper: 0,
-            backend,
+            launchMode,
             new QualificationBounds(30, 10, 1024 * 1024, 2, 100, 16),
             cancellation.Token);
 
@@ -45,7 +48,7 @@ public sealed class McpQualificationSmokeTests
             rom.Path,
             rom.Path + ".state",
             headerMapper: 4,
-            QualificationBackend.AprNes,
+            QualificationLaunchMode.PrimaryDefault,
             new QualificationBounds(30, 10, 1024 * 1024, 2, 100, 16),
             cancellation.Token);
 
@@ -57,7 +60,7 @@ public sealed class McpQualificationSmokeTests
     public async Task Mmc3_high_bank_values_wrap_to_the_available_prg_and_chr_pages_over_stdio()
     {
         using var rom = TemporaryTestFile.FromBytes(CreateHighBankMmc3());
-        await using var client = McpStdioClient.Start(FindServerAssembly(), QualificationBackend.AprNes);
+        await using var client = McpStdioClient.Start(FindServerAssembly(), QualificationLaunchMode.PrimaryDefault);
         Assert.NotNull(client);
         Assert.True(await client.InitializeAsync(CancellationToken.None));
         Assert.True((await client.CallJsonAsync("load_rom", new { path = rom.Path }, CancellationToken.None)).IsSuccess);
@@ -117,7 +120,7 @@ public sealed class McpQualificationSmokeTests
     public async Task Mmc3_high_bank_values_mirror_across_non_power_of_two_page_counts()
     {
         using var rom = TemporaryTestFile.FromBytes(CreateHighBankMmc3(prgBankCount: 3, chrBankCount: 3));
-        await using var client = McpStdioClient.Start(FindServerAssembly(), QualificationBackend.AprNes);
+        await using var client = McpStdioClient.Start(FindServerAssembly(), QualificationLaunchMode.PrimaryDefault);
         Assert.NotNull(client);
         Assert.True(await client.InitializeAsync(CancellationToken.None));
         Assert.True((await client.CallJsonAsync("load_rom", new { path = rom.Path }, CancellationToken.None)).IsSuccess);

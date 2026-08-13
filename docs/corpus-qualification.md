@@ -17,6 +17,8 @@ dotnet tools/Nes.Corpus.Qualification/bin/Release/net10.0/Nes.Corpus.Qualificati
 
 The expected per-mapper counts are mandatory and must sum to `--expected-total`. A missing or unexpected cohort, a qualification failure, a timeout, a worker/protocol failure, or incomplete independent mapper 0-3 coverage produces a nonzero exit code.
 
+The primary cohort launches each packaged MCP server with `NES_MCP_EMULATOR_BACKEND` absent, even if the qualification parent inherited that variable, and accepts the run only when `get_state` observes AprNes plus safe backend/server versions and its debug-cycle limit. The independent mapper 0-3 recovery smoke remains a separate forced `adnes` launch. The aggregate reports the observed AprNes and ADNES identities, not these internal launch modes.
+
 ## Configuration
 
 Optional bounds are:

@@ -50,7 +50,7 @@ internal static class QualificationWorker
                         staging.StagedRom!.Path,
                         request.StatePath,
                         request.Header.HeaderMapper,
-                        request.Backend,
+                        request.LaunchMode,
                         request.Bounds,
                         CancellationToken.None).ConfigureAwait(false);
                     failure = smoke.FailureCategory;
@@ -81,7 +81,7 @@ internal static class QualificationWorker
             failure,
             request?.Header.HeaderMapper ?? 0,
             stopwatch.ElapsedMilliseconds,
-            request?.Backend ?? QualificationBackend.AprNes,
+            request is null ? QualificationBackend.AprNes : ObservedBackend(request.LaunchMode),
             smoke?.BackendVersion,
             smoke?.ServerVersion);
     }
@@ -105,7 +105,7 @@ internal static class QualificationWorker
         request.ObservedBytes <= request.Bounds.MaxImageBytes &&
         request.Header.HeaderMapper is >= 0 and <= 0x0FFF &&
         Enum.IsDefined(request.Header.Format) &&
-        Enum.IsDefined(request.Backend) &&
+        Enum.IsDefined(request.LaunchMode) &&
         File.Exists(request.ServerAssembly) &&
         TempArtifacts.IsGenericImagePath(request.StagingPath) &&
         TempArtifacts.IsGenericStatePath(request.StatePath) &&
@@ -130,6 +130,13 @@ internal static class QualificationWorker
             WorkerSourceKind.ZipEntry => request.EntryIndex is >= 0,
             _ => false,
         };
+
+    private static QualificationBackend ObservedBackend(QualificationLaunchMode launchMode) => launchMode switch
+    {
+        QualificationLaunchMode.PrimaryDefault => QualificationBackend.AprNes,
+        QualificationLaunchMode.Adnes => QualificationBackend.Adnes,
+        _ => throw new ArgumentOutOfRangeException(nameof(launchMode)),
+    };
 
     private static RomSource ToSource(WorkerRequest request) => request.SourceKind switch
     {

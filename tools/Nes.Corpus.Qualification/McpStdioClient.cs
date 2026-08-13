@@ -58,14 +58,14 @@ internal sealed class McpStdioClient : IAsyncDisposable
         stderrDrain = DiscardAsync(process.StandardError.BaseStream);
     }
 
-    public static McpStdioClient? Start(string serverAssembly, QualificationBackend backend)
+    public static McpStdioClient? Start(string serverAssembly, QualificationLaunchMode launchMode)
     {
         var startInfo = new ProcessStartInfo("dotnet");
         startInfo.ArgumentList.Add(serverAssembly);
-        return Start(startInfo, backend);
+        return Start(startInfo, launchMode);
     }
 
-    internal static McpStdioClient? Start(ProcessStartInfo startInfo, QualificationBackend backend)
+    internal static McpStdioClient? Start(ProcessStartInfo startInfo, QualificationLaunchMode launchMode)
     {
         try
         {
@@ -73,12 +73,18 @@ internal sealed class McpStdioClient : IAsyncDisposable
             startInfo.RedirectStandardOutput = true;
             startInfo.RedirectStandardError = true;
             startInfo.UseShellExecute = false;
-            startInfo.Environment["NES_MCP_EMULATOR_BACKEND"] = backend switch
+            switch (launchMode)
             {
-                QualificationBackend.AprNes => "aprnes",
-                QualificationBackend.Adnes => "adnes",
-                _ => throw new ArgumentOutOfRangeException(nameof(backend)),
-            };
+                case QualificationLaunchMode.PrimaryDefault:
+                    startInfo.Environment.Remove("NES_MCP_EMULATOR_BACKEND");
+                    break;
+                case QualificationLaunchMode.Adnes:
+                    startInfo.Environment["NES_MCP_EMULATOR_BACKEND"] = "adnes";
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(launchMode));
+            }
+
             var process = Process.Start(startInfo);
             return process is null ? null : new McpStdioClient(process);
         }

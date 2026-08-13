@@ -4,7 +4,7 @@
 
 The MCP server exposes CPU stepping, frame execution, deterministic controller input timelines, breakpoints/watchpoints, CPU memory reads/writes, authoritative PPU/OAM inspection, continuous PPU-register tracing, correlated screen/RAM/PPU observation, symbols, lightweight disassembly, savestates, screen-region probes, and PNG screen capture.
 
-By default `Nes.Mcp` runs in `auto` mode: the vendored MIT-licensed [ADNES](https://github.com/enusbaum/ADNES) backend is used for mappers 0-3, and the vendored [AprNes](https://github.com/erspicu/AprNes) backend is used for broader mapper coverage, including MMC3. AprNes now implements the MCP debug workflows exposed by the tool surface, including savestates, continue/break/watch execution stops, conditional runs, last-writer queries, and write tracing.
+By default, with no backend variable configured, `Nes.Mcp` directly uses the vendored [AprNes](https://github.com/erspicu/AprNes) backend for every supported ROM. The legacy `auto` value and explicit `aprnes` value select that same path; neither performs mapper-based routing. AprNes implements the complete MCP debug workflow, including continuous PPU-register tracing and correlated execution observation for mappers 0-3 and the broader supported mapper set.
 
 ## Build
 
@@ -26,13 +26,19 @@ From the repo root:
 dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
 ```
 
-To force the AprNes backend for every ROM:
+The default invocation above needs no backend configuration. `aprnes` is an equivalent explicit selection:
 
 ```bash
 NES_MCP_EMULATOR_BACKEND=aprnes dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
 ```
 
-Valid backend values are `auto`, `adnes`, and `aprnes`.
+The vendored MIT-licensed [ADNES](https://github.com/enusbaum/ADNES) backend remains available only as a temporary, explicit recovery option:
+
+```bash
+NES_MCP_EMULATOR_BACKEND=adnes dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
+```
+
+Valid configured values are `auto`, `aprnes`, and `adnes`; leaving the variable unset is the recommended default. An invalid value fails during startup with the accepted choices instead of deferring the error to the first tool call.
 
 ## Connect An MCP Client
 
@@ -123,7 +129,7 @@ See [docs/mcp-tools.md](docs/mcp-tools.md) for schemas and examples.
 
 ## Current Limitations
 
-- The default `auto` backend uses ADNES for NROM, MMC1, UxROM, and CNROM, then falls back to AprNes for broader mapper coverage, including MMC3.
+- ADNES remains packaged as a temporary explicit fallback for reversibility, but it does not implement continuous PPU-register tracing or correlated execution observation and is planned for removal.
 - Debug stepping, conditional breakpoints, and watchpoints are implemented in the managed session loop around each backend.
 - Disassembly is intentionally small and currently covers the opcodes most useful for first smoke/debug work; unknown opcodes are returned as `.db`.
 - Symbol parsing is intentionally simple: `BANK:ADDR Name` and `ADDR Name` lines with `;` or `#` comments.

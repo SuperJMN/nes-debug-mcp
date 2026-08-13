@@ -3,6 +3,7 @@ using System.Text.Json;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Nes.Debug.Core;
+using Nes.Debug.Emulator;
 using Nes.Debug.Mcp;
 
 namespace Nes.Debug.Tests;
@@ -127,6 +128,71 @@ public sealed class McpToolValidationTests
         Assert.Contains("\"backend\":\"AprNes\"", json, StringComparison.Ordinal);
         Assert.Contains("\"backendVersion\":\"test-build\"", json, StringComparison.Ordinal);
         Assert.Contains("\"debugCycleLimit\":1024", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execution_failure_adds_bounded_backend_diagnostics_without_copying_rom_identity()
+    {
+        var session = new FakeDebugSession
+        {
+            ConfiguredRunFrameResult = DebugResult<RunFrameResult>.Failure("run_frame_failed", "bounded failure"),
+            GetStateResult = DebugResult<SessionStateResult>.Success(
+                new SessionStateResult(true, "private-title", 4, "0x8000", 0)
+                {
+                    Backend = "AprNes",
+                    BackendVersion = "backend-build",
+                    DebugCycleLimit = 1024,
+                }),
+        };
+
+        var result = NesDebugTools.RunFrame(session, 1);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("run_frame_failed", error.Error.Code);
+        Assert.NotNull(error.Diagnostics);
+        Assert.Equal("AprNes", error.Diagnostics.Backend);
+        Assert.Equal("backend-build", error.Diagnostics.BackendVersion);
+        Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.ServerVersion));
+        Assert.Equal(1024, error.Diagnostics.DebugCycleLimit);
+
+        var json = JsonSerializer.Serialize(error);
+        Assert.Contains("\"diagnostics\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-title", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("mapper", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execution_input_validation_does_not_query_or_invent_backend_diagnostics()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.RunFrame(session, 0);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("invalid_count", error.Error.Code);
+        Assert.Null(error.Diagnostics);
+        Assert.Equal(0, session.RunFrameCalls);
+        Assert.DoesNotContain("diagnostics", JsonSerializer.Serialize(error), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Adnes_execution_failure_reports_identity_without_inventing_an_aprnes_cycle_limit()
+    {
+        using var session = new ManagedNesDebugSession();
+
+        var result = NesDebugTools.RunFrame(session, 1);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("no_rom_loaded", error.Error.Code);
+        Assert.NotNull(error.Diagnostics);
+        Assert.Equal("ADNES", error.Diagnostics.Backend);
+        Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.BackendVersion));
+        Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.ServerVersion));
+        Assert.Null(error.Diagnostics.DebugCycleLimit);
+
+        var json = JsonSerializer.Serialize(error);
+        Assert.Contains("\"backend\":\"ADNES\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("debugCycleLimit", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -706,6 +772,7 @@ public sealed class McpToolValidationTests
             DebugResult<PpuStateResult>.Failure("not_configured", "Fake session result was not configured.");
         public DebugResult<PpuRegisterTraceResult> PpuRegisterTraceResult { get; init; } =
             DebugResult<PpuRegisterTraceResult>.Failure("not_configured", "Fake session result was not configured.");
+        public DebugResult<RunFrameResult>? ConfiguredRunFrameResult { get; init; }
 
         public DebugResult<LoadRomResult> LoadRom(string path) => throw new NotSupportedException();
 
@@ -723,6 +790,11 @@ public sealed class McpToolValidationTests
 
         public DebugResult<RunFrameResult> RunFrame(int count)
         {
+            if (ConfiguredRunFrameResult.HasValue)
+            {
+                return ConfiguredRunFrameResult.Value;
+            }
+
             RunFrameCalls += count;
             return DebugResult<RunFrameResult>.Success(
                 new RunFrameResult(count, RunFrameCalls, EmptyRegisters(), false, new TimelineCounters((ulong)RunFrameCalls, 0)));

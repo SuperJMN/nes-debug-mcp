@@ -36,7 +36,7 @@ internal static class QualificationCoordinator
             var execution = await RunWorkerAsync(
                 candidate,
                 options,
-                QualificationBackend.AprNes,
+                QualificationLaunchMode.PrimaryDefault,
                 cancellationToken).ConfigureAwait(false);
             maximumElapsed = Math.Max(maximumElapsed, execution.WallElapsedMilliseconds);
             var counter = mapperCounters[candidate.Header.HeaderMapper];
@@ -81,7 +81,7 @@ internal static class QualificationCoordinator
             var execution = await RunWorkerAsync(
                 candidate,
                 options,
-                QualificationBackend.Adnes,
+                QualificationLaunchMode.Adnes,
                 cancellationToken).ConfigureAwait(false);
             maximumElapsed = Math.Max(maximumElapsed, execution.WallElapsedMilliseconds);
             var counter = independentCounters[mapper];
@@ -201,9 +201,10 @@ internal static class QualificationCoordinator
     private static async Task<WorkerExecution> RunWorkerAsync(
         RomCandidate candidate,
         QualificationOptions options,
-        QualificationBackend backend,
+        QualificationLaunchMode launchMode,
         CancellationToken cancellationToken)
     {
+        var backend = ObservedBackend(launchMode);
         var artifacts = TempArtifacts.Create();
         WorkerResult workerResult = FailureResult(
             candidate.Header.HeaderMapper,
@@ -215,6 +216,7 @@ internal static class QualificationCoordinator
         try
         {
             var request = new WorkerRequest(
+                WorkerProtocol.SchemaVersion,
                 candidate.Source is RomSource.Direct ? WorkerSourceKind.Direct : WorkerSourceKind.ZipEntry,
                 candidate.Source.ContainerPath,
                 candidate.Source is RomSource.ZipEntry zip ? zip.EntryIndex : null,
@@ -223,7 +225,7 @@ internal static class QualificationCoordinator
                 artifacts.ImagePath,
                 artifacts.StatePath,
                 options.ServerAssembly,
-                backend,
+                launchMode,
                 options.Bounds);
             var process = await BoundedProcessRunner.RunAsync(
                 CreateWorkerStartInfo(),
@@ -261,6 +263,13 @@ internal static class QualificationCoordinator
 
         return new WorkerExecution(workerResult, elapsed);
     }
+
+    private static QualificationBackend ObservedBackend(QualificationLaunchMode launchMode) => launchMode switch
+    {
+        QualificationLaunchMode.PrimaryDefault => QualificationBackend.AprNes,
+        QualificationLaunchMode.Adnes => QualificationBackend.Adnes,
+        _ => throw new ArgumentOutOfRangeException(nameof(launchMode)),
+    };
 
     internal static WorkerResult InterpretWorkerResult(
         BoundedProcessResult process,

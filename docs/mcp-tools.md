@@ -4,6 +4,7 @@ All CPU addresses are 16-bit NES CPU addresses. Address strings accept `0xC000`,
 PPU tile dump tools use PPU addresses.
 Execution and state results include a `timeline` object with cumulative `frames`, CPU `cycles`, and `instructions` since the last ROM load, reset, or loaded savestate.
 `get_state` also reports `serverVersion`, the active `backend`, and `backendVersion`. Because ADNES and AprNes are vendored and locally integrated, `backendVersion` identifies the `Nes.Debug.Emulator` build that contains that source rather than an independent upstream package. AprNes additionally reports its `debugCycleLimit`.
+When a tool that has begun CPU or frame execution fails, its error response also contains a bounded `diagnostics` object with `backend`, `backendVersion`, `serverVersion`, and the applicable AprNes `debugCycleLimit`. Input-validation errors raised before execution do not invent backend context, and ADNES failures omit `debugCycleLimit`.
 
 ## Execution
 
@@ -184,4 +185,4 @@ Savestates make repeated observations deterministic within the same backend and 
 
 ## Backend Support
 
-`read_ppu_state`, `read_screen_region`, `observe_screen`, and nametable dumps use the capabilities exposed by the active backend. The exact continuous bus-write correlation required by `trace_ppu_register_writes` and `observe_execution` is currently implemented by AprNes. Managed/ADNES sessions return an explicit `not_supported` result for those two tools; set `NES_MCP_EMULATOR_BACKEND=aprnes` when the ROM would otherwise select ADNES.
+`read_ppu_state`, `read_screen_region`, `observe_screen`, and nametable dumps use the capabilities exposed by the active backend. The exact continuous bus-write correlation required by `trace_ppu_register_writes` and `observe_execution` is implemented by the default AprNes session. Explicit ADNES sessions return an actionable `not_supported` result for those two tools; unset `NES_MCP_EMULATOR_BACKEND`, or use `auto`/`aprnes`, to return to AprNes.
