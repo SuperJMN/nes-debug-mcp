@@ -677,7 +677,7 @@ unsafe public partial class NesCore
 
     private static void WriteUnmanagedBlocks(BinaryWriter writer)
     {
-        writer.Write(13);
+        writer.Write(14);
         WriteByteBlock(writer, "NES_MEM", NES_MEM, 0x10000);
         WriteByteBlock(writer, "ppu_ram", ppu_ram, 0x4000);
         WriteByteBlock(writer, "spr_ram", spr_ram, 0x100);
@@ -691,6 +691,7 @@ unsafe public partial class NesCore
         WriteByteBlock(writer, "ntBankWritable", ntBankWritable, 4);
         WriteUIntBlock(writer, "digitalFrameRgb", digitalFrameRgb, DebugScreenWidth * DebugScreenHeight);
         WriteIntBlock(writer, "expansionChannels", expansionChannels, 8);
+        WriteIntBlock(writer, "Vertical", Vertical, 1);
     }
 
     private static void ReadUnmanagedBlocks(BinaryReader reader)
@@ -714,6 +715,7 @@ unsafe public partial class NesCore
                 case "ntBankWritable": ReadByteBlock(reader, ntBankWritable, 4); break;
                 case "digitalFrameRgb": ReadUIntBlock(reader, digitalFrameRgb, DebugScreenWidth * DebugScreenHeight); break;
                 case "expansionChannels": ReadIntBlock(reader, expansionChannels, 8); break;
+                case "Vertical": ReadIntBlock(reader, Vertical, 1); break;
                 default: SkipUnmanagedBlock(reader); break;
             }
         }

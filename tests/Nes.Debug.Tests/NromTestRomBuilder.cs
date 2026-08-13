@@ -1,5 +1,11 @@
 namespace Nes.Debug.Tests;
 
+public sealed record DebugContractRom(
+    byte[] Bytes,
+    int Mapper,
+    int PrgRomBanks,
+    int ChrRomBanks);
+
 public enum NromMirroring
 {
     Horizontal,

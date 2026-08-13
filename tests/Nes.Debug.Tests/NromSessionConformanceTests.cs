@@ -5,17 +5,23 @@ using System.Text.Json;
 
 namespace Nes.Debug.Tests;
 
-public abstract class NromSessionConformanceTests<TSession>
+public abstract class NesDebugSessionConformanceTests<TSession>
     where TSession : INesDebugSession, IDisposable
 {
     protected abstract TSession CreateSession();
 
     protected virtual bool SupportsContinuousObservation => false;
 
+    protected abstract DebugContractRom CreateContractRom(
+        byte[] program,
+        int prgRomBanks = 2,
+        int chrRomBanks = 1,
+        NromMirroring mirroring = NromMirroring.Horizontal);
+
     [Fact]
     public void Load_reset_execution_memory_symbols_and_input_timeline_conform()
     {
-        var fixture = NromTestRomBuilder.CreateProgram(
+        var fixture = CreateContractRom(
         [
             0xA9, 0x42,       // $8000: LDA #$42
             0x85, 0x02,       // $8002: STA $02
@@ -61,9 +67,9 @@ public abstract class NromSessionConformanceTests<TSession>
         var resetRam = session.ReadMemory(0x0002, 2);
 
         AssertSuccess(load);
-        Assert.Equal(0, load.Value.Mapper);
-        Assert.Equal(2, load.Value.PrgRomBanks);
-        Assert.Equal(1, load.Value.ChrRomBanks);
+        Assert.Equal(fixture.Mapper, load.Value.Mapper);
+        Assert.Equal(fixture.PrgRomBanks, load.Value.PrgRomBanks);
+        Assert.Equal(fixture.ChrRomBanks, load.Value.ChrRomBanks);
         AssertSuccess(initial);
         Assert.True(initial.Value.RomLoaded);
         Assert.Equal(0UL, initial.Value.Timeline.Frames);
@@ -109,7 +115,7 @@ public abstract class NromSessionConformanceTests<TSession>
     [Fact]
     public void Breakpoints_watchpoints_conditions_last_writers_and_bounded_traces_conform()
     {
-        var fixture = NromTestRomBuilder.CreateProgram(
+        var fixture = CreateContractRom(
         [
             0xA9, 0x2A,       // $8000: LDA #$2A
             0x85, 0x02,       // $8002: STA $02
@@ -214,9 +220,9 @@ public abstract class NromSessionConformanceTests<TSession>
             0x4C, (byte)traceLoop, (byte)(traceLoop >> 8),
         ]);
 
-        var fixture = NromTestRomBuilder.CreateProgram(
+        var fixture = CreateContractRom(
             program.ToArray(),
-            prgRomBanks: 1,
+            prgRomBanks: 2,
             chrRomBanks: 0,
             NromMirroring.Vertical);
         using var rom = TemporaryTestFile.FromBytes(fixture.Bytes);
@@ -251,8 +257,8 @@ public abstract class NromSessionConformanceTests<TSession>
         Assert.Equal("image/png", capture.Value.MimeType);
         Assert.NotEmpty(capture.Value.Data);
         AssertSuccess(tilemap);
-        Assert.Equal("11", FirstByte(tilemap.Value.Rows[0]));
-        Assert.Equal("AA", FirstByte(tilemap.Value.AttributeRows[0]));
+        Assert.Equal("11", FirstByteFromRow(tilemap.Value.Rows[0]));
+        Assert.Equal("AA", FirstByteFromRow(tilemap.Value.AttributeRows[0]));
         AssertSuccess(nametables);
         Assert.True(nametables.Value.DetailsIncluded);
         Assert.Equal(4, nametables.Value.Nametables.Count);
@@ -384,7 +390,7 @@ public abstract class NromSessionConformanceTests<TSession>
             0x4C, (byte)loop, (byte)(loop >> 8),
         ]);
 
-        var fixture = NromTestRomBuilder.CreateProgram(
+        var fixture = CreateContractRom(
             program.ToArray(),
             prgRomBanks: 2,
             chrRomBanks: 0,
@@ -423,54 +429,7 @@ public abstract class NromSessionConformanceTests<TSession>
         Assert.Equal(firstFuture, replayedFuture);
     }
 
-    [Theory]
-    [InlineData(1, 0, NromMirroring.Horizontal)]
-    [InlineData(1, 0, NromMirroring.Vertical)]
-    [InlineData(1, 1, NromMirroring.Horizontal)]
-    [InlineData(1, 1, NromMirroring.Vertical)]
-    [InlineData(2, 0, NromMirroring.Horizontal)]
-    [InlineData(2, 0, NromMirroring.Vertical)]
-    [InlineData(2, 1, NromMirroring.Horizontal)]
-    [InlineData(2, 1, NromMirroring.Vertical)]
-    public void Nrom_matrix_exposes_prg_chr_and_mirroring_sentinels(
-        int prgRomBanks,
-        int chrRomBanks,
-        NromMirroring mirroring)
-    {
-        var fixture = NromTestRomBuilder.CreateMatrixFixture(prgRomBanks, chrRomBanks, mirroring);
-        using var rom = TemporaryTestFile.FromBytes(fixture.Bytes);
-        using var session = CreateSession();
-
-        var load = session.LoadRom(rom.Path);
-        Assert.True(load.IsSuccess, load.Error?.Message);
-        Assert.Equal(0, load.Value.Mapper);
-        Assert.Equal(prgRomBanks, load.Value.PrgRomBanks);
-        Assert.Equal(chrRomBanks, load.Value.ChrRomBanks);
-
-        var initialize = session.StepInstruction(fixture.InitializationInstructionCount);
-        var lowerPrg = session.ReadMemory(0xBFF0, 1);
-        var upperPrg = session.ReadMemory(0xFFF0, 1);
-        var chr = session.DumpTileset(0x0000, 1);
-        var nametables = new[] { 0x2000, 0x2400, 0x2800, 0x2C00 }
-            .Select(address => session.DumpTilemap((ushort)address))
-            .ToArray();
-
-        Assert.True(initialize.IsSuccess, initialize.Error?.Message);
-        AssertSuccess(lowerPrg);
-        AssertSuccess(upperPrg);
-        AssertSuccess(chr);
-        Assert.All(nametables, AssertSuccess);
-        Assert.Equal(fixture.LowerPrgSentinel, lowerPrg.Value.Bytes[0]);
-        Assert.Equal(fixture.UpperPrgSentinel, upperPrg.Value.Bytes[0]);
-        Assert.StartsWith(fixture.ChrSentinel, chr.Value.Tiles[0].BytesHex, StringComparison.Ordinal);
-
-        var expectedTiles = mirroring == NromMirroring.Horizontal
-            ? new[] { "22", "22", "44", "44" }
-            : ["33", "44", "33", "44"];
-        Assert.Equal(expectedTiles, nametables.Select(result => FirstByte(result.Value.Rows[0])));
-    }
-
-    private static string FirstByte(string row) =>
+    protected static string FirstByteFromRow(string row) =>
         row.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
 
     private static ObservableSnapshot CaptureObservableSnapshot(INesDebugSession session)
@@ -545,4 +504,68 @@ public abstract class NromSessionConformanceTests<TSession>
         string ChrRamHash,
         string FramebufferHash,
         TimelineCounters Timeline);
+}
+
+public abstract class NromSessionConformanceTests<TSession> : NesDebugSessionConformanceTests<TSession>
+    where TSession : INesDebugSession, IDisposable
+{
+    protected override DebugContractRom CreateContractRom(
+        byte[] program,
+        int prgRomBanks = 2,
+        int chrRomBanks = 1,
+        NromMirroring mirroring = NromMirroring.Horizontal)
+    {
+        var fixture = NromTestRomBuilder.CreateProgram(program, prgRomBanks, chrRomBanks, mirroring);
+        return new DebugContractRom(fixture.Bytes, 0, fixture.PrgRomBanks, fixture.ChrRomBanks);
+    }
+
+    [Theory]
+    [InlineData(1, 0, NromMirroring.Horizontal)]
+    [InlineData(1, 0, NromMirroring.Vertical)]
+    [InlineData(1, 1, NromMirroring.Horizontal)]
+    [InlineData(1, 1, NromMirroring.Vertical)]
+    [InlineData(2, 0, NromMirroring.Horizontal)]
+    [InlineData(2, 0, NromMirroring.Vertical)]
+    [InlineData(2, 1, NromMirroring.Horizontal)]
+    [InlineData(2, 1, NromMirroring.Vertical)]
+    public void Nrom_matrix_exposes_prg_chr_and_mirroring_sentinels(
+        int prgRomBanks,
+        int chrRomBanks,
+        NromMirroring mirroring)
+    {
+        var fixture = NromTestRomBuilder.CreateMatrixFixture(prgRomBanks, chrRomBanks, mirroring);
+        using var rom = TemporaryTestFile.FromBytes(fixture.Bytes);
+        using var session = CreateSession();
+
+        var load = session.LoadRom(rom.Path);
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        Assert.Equal(0, load.Value.Mapper);
+        Assert.Equal(prgRomBanks, load.Value.PrgRomBanks);
+        Assert.Equal(chrRomBanks, load.Value.ChrRomBanks);
+
+        var initialize = session.StepInstruction(fixture.InitializationInstructionCount);
+        var lowerPrg = session.ReadMemory(0xBFF0, 1);
+        var upperPrg = session.ReadMemory(0xFFF0, 1);
+        var chr = session.DumpTileset(0x0000, 1);
+        var nametables = new[] { 0x2000, 0x2400, 0x2800, 0x2C00 }
+            .Select(address => session.DumpTilemap((ushort)address))
+            .ToArray();
+
+        Assert.True(initialize.IsSuccess, initialize.Error?.Message);
+        AssertSuccess(lowerPrg);
+        AssertSuccess(upperPrg);
+        AssertSuccess(chr);
+        Assert.All(nametables, AssertSuccess);
+        Assert.Equal(fixture.LowerPrgSentinel, lowerPrg.Value.Bytes[0]);
+        Assert.Equal(fixture.UpperPrgSentinel, upperPrg.Value.Bytes[0]);
+        Assert.StartsWith(fixture.ChrSentinel, chr.Value.Tiles[0].BytesHex, StringComparison.Ordinal);
+
+        var expectedTiles = mirroring == NromMirroring.Horizontal
+            ? new[] { "22", "22", "44", "44" }
+            : ["33", "44", "33", "44"];
+        Assert.Equal(expectedTiles, nametables.Select(result => FirstByteFromRow(result.Value.Rows[0])));
+    }
+
+    private static void AssertSuccess<T>(DebugResult<T> result) =>
+        Assert.True(result.IsSuccess, result.Error?.Message);
 }
