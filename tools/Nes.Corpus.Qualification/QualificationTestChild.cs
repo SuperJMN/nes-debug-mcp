@@ -135,6 +135,19 @@ internal static class QualificationTestChild
             await Task.Delay(Timeout.InfiniteTimeSpan).ConfigureAwait(false);
         }
 
+        if (mode == "trailing-noise")
+        {
+            await output.WriteAsync("not-json\n"u8.ToArray()).ConfigureAwait(false);
+            await output.FlushAsync().ConfigureAwait(false);
+        }
+
+        if (mode == "trailing-notification")
+        {
+            await output.WriteAsync("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n"u8.ToArray())
+                .ConfigureAwait(false);
+            await output.FlushAsync().ConfigureAwait(false);
+        }
+
         return 0;
     }
 

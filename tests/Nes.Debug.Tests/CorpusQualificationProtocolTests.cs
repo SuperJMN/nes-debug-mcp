@@ -25,6 +25,8 @@ public sealed class CorpusQualificationProtocolTests
 
     [Theory]
     [InlineData("2", "0=1", "invalid_expected_cohort")]
+    [InlineData("0", "0=0", "invalid_expected_total")]
+    [InlineData("1", "0=0", "invalid_mapper_expectation")]
     [InlineData("1", "4096=1", "invalid_mapper_expectation")]
     [InlineData("1", "0=-1", "invalid_mapper_expectation")]
     public void Command_line_rejects_invalid_expected_cohort(string total, string mapper, string errorCode)

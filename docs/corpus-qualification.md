@@ -15,7 +15,7 @@ dotnet tools/Nes.Corpus.Qualification/bin/Release/net10.0/Nes.Corpus.Qualificati
   [--expect-mapper <header-mapper>=<count> ...]
 ```
 
-The expected per-mapper counts are mandatory and must sum to `--expected-total`. A missing or unexpected cohort, a qualification failure, a timeout, or a worker/protocol failure produces a nonzero exit code.
+The expected total and every per-mapper count are mandatory, positive, and consistent: the mapper counts must sum to `--expected-total`. A missing or unexpected cohort, a qualification failure, a timeout, or a worker/protocol failure produces a nonzero exit code.
 
 Every worker accepts the run only when `get_state` observes AprNes plus safe backend/server versions and its debug-cycle limit. The aggregate reports only the observed AprNes identity.
 

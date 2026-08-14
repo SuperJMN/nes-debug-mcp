@@ -92,7 +92,7 @@ public static class QualificationCommandLine
 
                     break;
                 case "--expected-total":
-                    if (!TryParseNonNegative(value, out var total))
+                    if (!TryParsePositive(value, out var total))
                     {
                         return CommandLineResult.Failure("invalid_expected_total");
                     }
@@ -164,7 +164,7 @@ public static class QualificationCommandLine
         var separator = value.IndexOf('=');
         return separator > 0 && separator < value.Length - 1 &&
                TryParseNonNegative(value[..separator], out mapper) && mapper <= 0x0FFF &&
-               TryParseNonNegative(value[(separator + 1)..], out count);
+               TryParsePositive(value[(separator + 1)..], out count);
     }
 
     private static bool TryParsePositive(string value, out int result) =>

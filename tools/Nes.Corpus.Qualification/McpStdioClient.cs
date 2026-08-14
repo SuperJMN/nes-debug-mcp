@@ -189,14 +189,15 @@ internal sealed class McpStdioClient : IAsyncDisposable
         stopRequested = true;
         var closeInput = CloseInputAsync(input);
         var waitForExit = WaitForExitAsync();
+        var drainOutput = DrainTrailingNotificationsAsync(cancellationToken);
         if (!await WaitForTasksWithinAsync(
-                [closeInput, waitForExit],
+                [closeInput, waitForExit, drainOutput],
                 GracefulShutdownTimeout,
                 cancellationToken).ConfigureAwait(false))
         {
             KillTree();
             _ = await WaitForTasksWithinAsync(
-                [closeInput, waitForExit, stderrDrain],
+                [closeInput, waitForExit, drainOutput, stderrDrain],
                 CleanupGrace,
                 CancellationToken.None).ConfigureAwait(false);
             return false;
@@ -207,7 +208,8 @@ internal sealed class McpStdioClient : IAsyncDisposable
             return false;
         }
 
-        return TryGetSuccessfulExit() && !output.Overflow;
+        var outputIsValid = await drainOutput.ConfigureAwait(false);
+        return TryGetSuccessfulExit() && outputIsValid && !output.Overflow;
     }
 
     public async ValueTask DisposeAsync()
@@ -377,9 +379,54 @@ internal sealed class McpStdioClient : IAsyncDisposable
         jsonRpc.GetString() == "2.0" &&
         root.TryGetProperty("method", out var method) &&
         method.ValueKind == JsonValueKind.String &&
+        !string.IsNullOrWhiteSpace(method.GetString()) &&
         !root.TryGetProperty("id", out _) &&
         !root.TryGetProperty("result", out _) &&
-        !root.TryGetProperty("error", out _);
+        !root.TryGetProperty("error", out _) &&
+        (!root.TryGetProperty("params", out var parameters) ||
+         parameters.ValueKind is JsonValueKind.Object or JsonValueKind.Array);
+
+    private async Task<bool> DrainTrailingNotificationsAsync(CancellationToken cancellationToken)
+    {
+        var notificationCount = 0;
+        while (true)
+        {
+            byte[]? line;
+            try
+            {
+                line = await output.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+
+            if (line is null)
+            {
+                return true;
+            }
+
+            if (notificationCount == MaximumMessagesPerResponse)
+            {
+                return false;
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                if (!IsServerNotification(document.RootElement))
+                {
+                    return false;
+                }
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+
+            notificationCount++;
+        }
+    }
 
     private async Task<McpCallFailure> ClassifyEndOfOutputAsync(CancellationToken cancellationToken)
     {

@@ -63,6 +63,26 @@ public sealed class QualificationCoordinatorTests
     }
 
     [Fact]
+    public async Task Empty_zero_expected_cohort_cannot_succeed_without_running_aprnes()
+    {
+        using var corpus = new TemporaryCorpus();
+        var options = Options(corpus.Path, 0, new SortedDictionary<int, int> { [0] = 0 });
+
+        var run = await QualificationCoordinator.RunAsync(options, CancellationToken.None);
+
+        Assert.False(run.Succeeded);
+        Assert.False(run.Report.Succeeded);
+        Assert.Equal(0, run.Report.Attempted);
+        Assert.Contains(run.Report.FailureCategories, failure =>
+            failure.Category == FailureCategory.MissingCoverage);
+        Assert.All(run.Report.Backends, identity =>
+        {
+            Assert.Equal("unavailable", identity.BackendVersion);
+            Assert.Equal("unavailable", identity.ServerVersion);
+        });
+    }
+
+    [Fact]
     public async Task Complete_single_mapper_cohort_needs_no_separate_backend_smoke()
     {
         using var corpus = new TemporaryCorpus();

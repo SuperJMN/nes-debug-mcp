@@ -69,12 +69,13 @@ internal static class QualificationCoordinator
         var attempted = mapperOutcomes.Sum(outcome => outcome.Attempted);
         var passed = mapperOutcomes.Sum(outcome => outcome.Passed);
         var failed = mapperOutcomes.Sum(outcome => outcome.Failed);
+        var hasObservedIdentity = aprNesIdentities.Count == 1;
         if (aprNesIdentities.Count == 0)
         {
             aprNesIdentities.Add(new BackendIdentity(QualificationBackend.AprNes, "unavailable", "unavailable"));
         }
 
-        var succeeded = failed == 0 && failures.Count == 0;
+        var succeeded = attempted > 0 && failed == 0 && failures.Count == 0 && hasObservedIdentity;
         var report = new QualificationReport(
             AggregateJson.SchemaVersion,
             succeeded,
@@ -238,6 +239,11 @@ internal static class QualificationCoordinator
         ExpectedCohort expected,
         FailureAccumulator failures)
     {
+        if (expected.Total <= 0)
+        {
+            failures.Add(FailureCategory.MissingCoverage, null);
+        }
+
         var actual = candidates
             .GroupBy(candidate => candidate.Header.HeaderMapper)
             .ToDictionary(group => group.Key, group => group.Count());

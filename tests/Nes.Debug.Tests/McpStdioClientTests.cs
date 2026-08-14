@@ -123,6 +123,28 @@ public sealed class McpStdioClientTests
     }
 
     [Fact]
+    public async Task Stop_rejects_trailing_non_mcp_stdout_even_when_server_exits_successfully()
+    {
+        var startInfo = QualificationTestChild.CreateMcpStartInfo("trailing-noise");
+        await using var client = McpStdioClient.Start(startInfo);
+        Assert.NotNull(client);
+        Assert.True(await client.InitializeAsync(CancellationToken.None));
+
+        Assert.False(await client.StopAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Stop_accepts_a_trailing_mcp_notification_before_end_of_output()
+    {
+        var startInfo = QualificationTestChild.CreateMcpStartInfo("trailing-notification");
+        await using var client = McpStdioClient.Start(startInfo);
+        Assert.NotNull(client);
+        Assert.True(await client.InitializeAsync(CancellationToken.None));
+
+        Assert.True(await client.StopAsync(CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Dispose_is_bounded_and_kills_a_server_that_ignores_closed_input()
     {
         var startInfo = QualificationTestChild.CreateMcpStartInfo("hang-after-input");
