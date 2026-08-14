@@ -24,7 +24,7 @@
     <ToolCommandName>nesmcp</ToolCommandName>
     <PackageId>Nes.Mcp</PackageId>
     <Title>Nes.Mcp</Title>
-    <Description>Cross-platform MCP server for inspecting and controlling NES iNES ROMs. Exposes CPU stepping, breakpoints, memory, controller input, frame execution and inline screen captures over the Model Context Protocol.</Description>
+    <Description>AprNes-powered cross-platform MCP server for inspecting and controlling NES iNES ROMs. Exposes CPU stepping, breakpoints, memory, controller input, frame execution and inline screen captures over the Model Context Protocol.</Description>
     <Authors>SuperJMN</Authors>
     <Company>José Manuel Nieto (@SuperJMN)</Company>
     <Product>Nes.Mcp</Product>
@@ -37,7 +37,6 @@
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="" Visible="false" />
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="" Visible="false" />
-    <None Include="..\Nes.Debug.Emulator\ADNES-LICENSE.txt" Pack="true" PackagePath="" Visible="false" />
     <None Include="..\Nes.Debug.Emulator\AprNes\APRNES-LICENSE.txt" Pack="true" PackagePath="" Visible="false" />
     <None Include="..\Nes.Debug.Emulator\AprNes\TRICNES-LICENSE.txt" Pack="true" PackagePath="" Visible="false" />
     <None Include="..\Nes.Debug.Emulator\AprNes\MESEN2-GPL-3.0-LICENSE.txt" Pack="true" PackagePath="" Visible="false" />

@@ -14,8 +14,7 @@ builder.Logging.AddConsole(options =>
     options.LogToStandardErrorThreshold = LogLevel.Trace;
 });
 
-var emulatorBackend = Environment.GetEnvironmentVariable("NES_MCP_EMULATOR_BACKEND") ?? "auto";
-builder.Services.AddNesDebugSession(emulatorBackend);
+builder.Services.AddNesDebugSession();
 
 builder.Services
     .AddMcpServer()

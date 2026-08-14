@@ -4,7 +4,7 @@
 
 The MCP server exposes CPU stepping, frame execution, deterministic controller input timelines, breakpoints/watchpoints, CPU memory reads/writes, authoritative PPU/OAM inspection, continuous PPU-register tracing, correlated screen/RAM/PPU observation, symbols, lightweight disassembly, savestates, screen-region probes, and PNG screen capture.
 
-By default `Nes.Mcp` runs in `auto` mode: the vendored MIT-licensed [ADNES](https://github.com/enusbaum/ADNES) backend is used for mappers 0-3, and the vendored [AprNes](https://github.com/erspicu/AprNes) backend is used for broader mapper coverage, including MMC3. AprNes now implements the MCP debug workflows exposed by the tool surface, including savestates, continue/break/watch execution stops, conditional runs, last-writer queries, and write tracing.
+`Nes.Mcp` directly uses the vendored [AprNes](https://github.com/erspicu/AprNes) backend for every supported ROM. AprNes implements the complete MCP debug workflow, including continuous PPU-register tracing and correlated execution observation for mappers 0-3 and the broader supported mapper set.
 
 ## Build
 
@@ -25,14 +25,6 @@ From the repo root:
 ```bash
 dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
 ```
-
-To force the AprNes backend for every ROM:
-
-```bash
-NES_MCP_EMULATOR_BACKEND=aprnes dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
-```
-
-Valid backend values are `auto`, `adnes`, and `aprnes`.
 
 ## Connect An MCP Client
 
@@ -123,8 +115,7 @@ See [docs/mcp-tools.md](docs/mcp-tools.md) for schemas and examples.
 
 ## Current Limitations
 
-- The default `auto` backend uses ADNES for NROM, MMC1, UxROM, and CNROM, then falls back to AprNes for broader mapper coverage, including MMC3.
-- Debug stepping, conditional breakpoints, and watchpoints are implemented in the managed session loop around each backend.
+- Debug stepping, conditional breakpoints, and watchpoints are implemented by the AprNes debug session.
 - Disassembly is intentionally small and currently covers the opcodes most useful for first smoke/debug work; unknown opcodes are returned as `.db`.
 - Symbol parsing is intentionally simple: `BANK:ADDR Name` and `ADDR Name` lines with `;` or `#` comments.
 - Savestates are debugger snapshots, not a stable long-term archival format. They should be treated as version-bound to the current backend implementation.
@@ -142,7 +133,6 @@ See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for attribution, license no
 
 The main local license files are:
 
-- [src/Nes.Debug.Emulator/ADNES-LICENSE.txt](src/Nes.Debug.Emulator/ADNES-LICENSE.txt)
 - [src/Nes.Debug.Emulator/AprNes/APRNES-LICENSE.txt](src/Nes.Debug.Emulator/AprNes/APRNES-LICENSE.txt)
 - [src/Nes.Debug.Emulator/AprNes/TRICNES-LICENSE.txt](src/Nes.Debug.Emulator/AprNes/TRICNES-LICENSE.txt)
 - [src/Nes.Debug.Emulator/AprNes/MESEN2-GPL-3.0-LICENSE.txt](src/Nes.Debug.Emulator/AprNes/MESEN2-GPL-3.0-LICENSE.txt)

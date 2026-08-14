@@ -32,7 +32,7 @@ public static class ScreenObserver
         var samples = new List<ScreenFrameObservation>(frameCount);
         var framesRun = 0;
         var hitBreakpoint = false;
-        var timeline = new TimelineCounters(0, 0);
+        var timeline = new TimelineCounters(0, 0, 0);
 
         for (var frameOffset = 1; frameOffset <= frameCount; frameOffset++)
         {

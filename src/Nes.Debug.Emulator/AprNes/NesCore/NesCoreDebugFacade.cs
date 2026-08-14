@@ -59,6 +59,7 @@ public readonly record struct NesCoreDebugPpuRegisterWrite(
 
 unsafe public partial class NesCore
 {
+    private const string NametableMirroringStateBlock = "nametableMirroring";
     private const int DebugScreenWidth = 256;
     private const int DebugScreenHeight = 240;
     private const int MaxCpuCyclesPerReset = 128;
@@ -677,7 +678,8 @@ unsafe public partial class NesCore
 
     private static void WriteUnmanagedBlocks(BinaryWriter writer)
     {
-        writer.Write(13);
+        const int blockCount = 14;
+        writer.Write(blockCount);
         WriteByteBlock(writer, "NES_MEM", NES_MEM, 0x10000);
         WriteByteBlock(writer, "ppu_ram", ppu_ram, 0x4000);
         WriteByteBlock(writer, "spr_ram", spr_ram, 0x100);
@@ -691,6 +693,7 @@ unsafe public partial class NesCore
         WriteByteBlock(writer, "ntBankWritable", ntBankWritable, 4);
         WriteUIntBlock(writer, "digitalFrameRgb", digitalFrameRgb, DebugScreenWidth * DebugScreenHeight);
         WriteIntBlock(writer, "expansionChannels", expansionChannels, 8);
+        WriteIntBlock(writer, NametableMirroringStateBlock, Vertical, 1);
     }
 
     private static void ReadUnmanagedBlocks(BinaryReader reader)
@@ -714,6 +717,7 @@ unsafe public partial class NesCore
                 case "ntBankWritable": ReadByteBlock(reader, ntBankWritable, 4); break;
                 case "digitalFrameRgb": ReadUIntBlock(reader, digitalFrameRgb, DebugScreenWidth * DebugScreenHeight); break;
                 case "expansionChannels": ReadIntBlock(reader, expansionChannels, 8); break;
+                case NametableMirroringStateBlock: ReadIntBlock(reader, Vertical, 1); break;
                 default: SkipUnmanagedBlock(reader); break;
             }
         }

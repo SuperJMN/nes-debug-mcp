@@ -3,6 +3,7 @@ using System.Text.Json;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using Nes.Debug.Core;
+using Nes.Debug.Emulator;
 using Nes.Debug.Mcp;
 
 namespace Nes.Debug.Tests;
@@ -106,7 +107,7 @@ public sealed class McpToolValidationTests
         var session = new FakeDebugSession
         {
             GetStateResult = DebugResult<SessionStateResult>.Success(
-                new SessionStateResult(false, null, null, null, 0)
+                new SessionStateResult(false, null, null, null, 0, new TimelineCounters(0, 0, 0))
                 {
                     Backend = "AprNes",
                     BackendVersion = "test-build",
@@ -126,6 +127,71 @@ public sealed class McpToolValidationTests
         Assert.Contains("\"serverVersion\":", json, StringComparison.Ordinal);
         Assert.Contains("\"backend\":\"AprNes\"", json, StringComparison.Ordinal);
         Assert.Contains("\"backendVersion\":\"test-build\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"debugCycleLimit\":1024", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execution_failure_adds_bounded_backend_diagnostics_without_copying_rom_identity()
+    {
+        var session = new FakeDebugSession
+        {
+            ConfiguredRunFrameResult = DebugResult<RunFrameResult>.Failure("run_frame_failed", "bounded failure"),
+            GetStateResult = DebugResult<SessionStateResult>.Success(
+                new SessionStateResult(true, "private-title", 4, "0x8000", 0, new TimelineCounters(0, 0, 0))
+                {
+                    Backend = "AprNes",
+                    BackendVersion = "backend-build",
+                    DebugCycleLimit = 1024,
+                }),
+        };
+
+        var result = NesDebugTools.RunFrame(session, 1);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("run_frame_failed", error.Error.Code);
+        Assert.NotNull(error.Diagnostics);
+        Assert.Equal("AprNes", error.Diagnostics.Backend);
+        Assert.Equal("backend-build", error.Diagnostics.BackendVersion);
+        Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.ServerVersion));
+        Assert.Equal(1024, error.Diagnostics.DebugCycleLimit);
+
+        var json = JsonSerializer.Serialize(error);
+        Assert.Contains("\"diagnostics\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-title", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("mapper", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Execution_input_validation_does_not_query_or_invent_backend_diagnostics()
+    {
+        var session = new FakeDebugSession();
+
+        var result = NesDebugTools.RunFrame(session, 0);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("invalid_count", error.Error.Code);
+        Assert.Null(error.Diagnostics);
+        Assert.Equal(0, session.RunFrameCalls);
+        Assert.DoesNotContain("diagnostics", JsonSerializer.Serialize(error), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Aprnes_execution_failure_reports_real_identity_and_cycle_limit()
+    {
+        using var session = new AprNesDebugSession();
+
+        var result = NesDebugTools.RunFrame(session, 1);
+
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("no_rom_loaded", error.Error.Code);
+        Assert.NotNull(error.Diagnostics);
+        Assert.Equal("AprNes", error.Diagnostics.Backend);
+        Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.BackendVersion));
+        Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.ServerVersion));
+        Assert.Equal(1024, error.Diagnostics.DebugCycleLimit);
+
+        var json = JsonSerializer.Serialize(error);
+        Assert.Contains("\"backend\":\"AprNes\"", json, StringComparison.Ordinal);
         Assert.Contains("\"debugCycleLimit\":1024", json, StringComparison.Ordinal);
     }
 
@@ -243,7 +309,7 @@ public sealed class McpToolValidationTests
         var session = new FakeDebugSession
         {
             SetWatchpointResult = DebugResult<WatchpointSetResult>.Success(
-                new WatchpointSetResult("wp-1", "0x0002", mode.ToLowerInvariant(), true)),
+                new WatchpointSetResult("wp-1", "0x0002", mode.ToLowerInvariant(), true, 1)),
         };
 
         var result = NesDebugTools.SetWatchpoint(session, "0x0002", mode);
@@ -329,7 +395,7 @@ public sealed class McpToolValidationTests
         var session = new FakeDebugSession
         {
             PpuRegisterTraceResult = DebugResult<PpuRegisterTraceResult>.Success(
-                new PpuRegisterTraceResult(2, 0, ppu, ppu, [], 0, 0, false, true, "breakpoint", new TimelineCounters(0, 0))),
+                new PpuRegisterTraceResult(2, 0, ppu, ppu, [], 0, 0, false, true, "breakpoint", new TimelineCounters(0, 0, 0))),
         };
 
         var result = NesDebugTools.TracePpuRegisterWrites(
@@ -439,16 +505,6 @@ public sealed class McpToolValidationTests
         var error = Assert.IsType<ToolError>(result);
         Assert.Equal("invalid_tilemap_address", error.Error.Code);
         Assert.False(session.DumpTilemapCalled);
-    }
-
-    [Fact]
-    public void Tilemap_result_preserves_the_legacy_four_argument_constructor()
-    {
-        var result = new TilemapDumpResult("0x2000", 32, 30, ["00"]);
-
-        Assert.Equal("0x2000", result.Address);
-        Assert.Empty(result.AttributeAddress);
-        Assert.Empty(result.AttributeRows);
     }
 
     [Fact]
@@ -631,20 +687,7 @@ public sealed class McpToolValidationTests
             0);
 
     private static PpuStateResult EmptyPpuState() =>
-        new(
-            "0x00",
-            "0x00",
-            "0x00",
-            "0x00",
-            "0x0000",
-            "0x0000",
-            0,
-            0,
-            false,
-            false,
-            false,
-            false,
-            0);
+        PpuStateBuilder.Build(0, 0, 0, 0, 0, 0, 0, false, 0, 0, false, 0, new TimelineCounters(0, 0, 0));
 
     private sealed class FakeDebugSession : INesDebugSession, IPaletteIndexFrameSource
     {
@@ -706,6 +749,7 @@ public sealed class McpToolValidationTests
             DebugResult<PpuStateResult>.Failure("not_configured", "Fake session result was not configured.");
         public DebugResult<PpuRegisterTraceResult> PpuRegisterTraceResult { get; init; } =
             DebugResult<PpuRegisterTraceResult>.Failure("not_configured", "Fake session result was not configured.");
+        public DebugResult<RunFrameResult>? ConfiguredRunFrameResult { get; init; }
 
         public DebugResult<LoadRomResult> LoadRom(string path) => throw new NotSupportedException();
 
@@ -723,9 +767,14 @@ public sealed class McpToolValidationTests
 
         public DebugResult<RunFrameResult> RunFrame(int count)
         {
+            if (ConfiguredRunFrameResult.HasValue)
+            {
+                return ConfiguredRunFrameResult.Value;
+            }
+
             RunFrameCalls += count;
             return DebugResult<RunFrameResult>.Success(
-                new RunFrameResult(count, RunFrameCalls, EmptyRegisters(), false, new TimelineCounters((ulong)RunFrameCalls, 0)));
+                new RunFrameResult(count, RunFrameCalls, EmptyRegisters(), false, new TimelineCounters((ulong)RunFrameCalls, 0, 0)));
         }
 
         public int RunFrameCalls { get; private set; }
@@ -890,7 +939,7 @@ public sealed class McpToolValidationTests
 
         public DebugResult<NametableDumpResult> DumpNametables(bool includeDetails) =>
             DebugResult<NametableDumpResult>.Success(
-                new NametableDumpResult(includeDetails, [], new TimelineCounters(0, 0)));
+                new NametableDumpResult(includeDetails, [], new TimelineCounters(0, 0, 0)));
 
         public DebugResult<TilemapDumpResult> DumpTilemap(ushort address)
         {

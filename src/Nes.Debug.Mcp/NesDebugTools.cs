@@ -103,7 +103,7 @@ public static class NesDebugTools
             return Error("invalid_count", $"Instruction count must be between 1 and {MaxInstructionCount}.");
         }
 
-        return ToToolResult(session.StepInstruction(count));
+        return ToExecutionToolResult(session, session.StepInstruction(count));
     }
 
     [McpServerTool(Name = "run_frame", ReadOnly = false, Destructive = false)]
@@ -115,7 +115,7 @@ public static class NesDebugTools
             return Error("invalid_count", $"Frame count must be between 1 and {MaxFrameCount}.");
         }
 
-        return ToToolResult(session.RunFrame(count));
+        return ToExecutionToolResult(session, session.RunFrame(count));
     }
 
     [McpServerTool(Name = "set_controller", ReadOnly = false, Destructive = false)]
@@ -143,7 +143,7 @@ public static class NesDebugTools
 
         var parsed = ParseButtons(buttons);
         return parsed.IsSuccess
-            ? ToToolResult(session.PressButtons(parsed.Value, frameCount))
+            ? ToExecutionToolResult(session, session.PressButtons(parsed.Value, frameCount))
             : new ToolError(parsed.Error!);
     }
 
@@ -156,7 +156,7 @@ public static class NesDebugTools
             return Error("invalid_max_instructions", $"maxInstructions must be between 1 and {MaxContinueInstructions}.");
         }
 
-        return ToToolResult(session.ContinueUntilBreak(maxInstructions));
+        return ToExecutionToolResult(session, session.ContinueUntilBreak(maxInstructions));
     }
 
     [McpServerTool(Name = "step_over", ReadOnly = false, Destructive = false)]
@@ -168,7 +168,7 @@ public static class NesDebugTools
             return Error("invalid_max_instructions", $"maxInstructions must be between 1 and {MaxContinueInstructions}.");
         }
 
-        return ToToolResult(session.StepOver(maxInstructions));
+        return ToExecutionToolResult(session, session.StepOver(maxInstructions));
     }
 
     [McpServerTool(Name = "step_out", ReadOnly = false, Destructive = false)]
@@ -180,7 +180,7 @@ public static class NesDebugTools
             return Error("invalid_max_instructions", $"maxInstructions must be between 1 and {MaxContinueInstructions}.");
         }
 
-        return ToToolResult(session.StepOut(maxInstructions));
+        return ToExecutionToolResult(session, session.StepOut(maxInstructions));
     }
 
     [McpServerTool(Name = "run_until_condition", ReadOnly = false, Destructive = false)]
@@ -202,7 +202,7 @@ public static class NesDebugTools
             return Error("invalid_condition", $"Invalid condition: {conditionError ?? "Condition is required."}");
         }
 
-        return ToToolResult(session.RunUntilCondition(condition, maxInstructions, maxFrames));
+        return ToExecutionToolResult(session, session.RunUntilCondition(condition, maxInstructions, maxFrames));
     }
 
     [McpServerTool(Name = "set_breakpoint", ReadOnly = false, Destructive = false)]
@@ -478,7 +478,7 @@ public static class NesDebugTools
 
         var parsed = ParseAddress(address);
         return parsed.IsSuccess
-            ? ToToolResult(session.TraceUntilWrite(parsed.Value.Address, maxInstructions))
+            ? ToExecutionToolResult(session, session.TraceUntilWrite(parsed.Value.Address, maxInstructions))
             : new ToolError(parsed.Error!);
     }
 
@@ -499,7 +499,7 @@ public static class NesDebugTools
 
         var range = ValidateAddressRange(parsed.Value.Address, length, MaxWatchpointRangeLength);
         return range.IsSuccess
-            ? ToToolResult(session.TraceUntilWriteRange(parsed.Value.Address, length, maxInstructions))
+            ? ToExecutionToolResult(session, session.TraceUntilWriteRange(parsed.Value.Address, length, maxInstructions))
             : new ToolError(range.Error!);
     }
 
@@ -534,8 +534,10 @@ public static class NesDebugTools
             return new ToolError(parsedButtons.Error!);
         }
 
-        return ToToolResult(session.TracePpuRegisterWrites(
-            new PpuRegisterTraceRequest(frameCount, maxEvents, parsedRegisters.Value, parsedButtons.Value)));
+        return ToExecutionToolResult(
+            session,
+            session.TracePpuRegisterWrites(
+                new PpuRegisterTraceRequest(frameCount, maxEvents, parsedRegisters.Value, parsedButtons.Value)));
     }
 
     [McpServerTool(Name = "read_screen_region", ReadOnly = true, Destructive = false)]
@@ -564,7 +566,7 @@ public static class NesDebugTools
             return Error("invalid_frame_count", $"frameCount must be between 1 and {ScreenObserver.MaxFrames}.");
         }
 
-        return ToToolResult(session.ObserveScreen(frameCount));
+        return ToExecutionToolResult(session, session.ObserveScreen(frameCount));
     }
 
     [McpServerTool(Name = "observe_execution", ReadOnly = false, Destructive = false)]
@@ -636,14 +638,16 @@ public static class NesDebugTools
             return new ToolError(parsedRegisters.Error!);
         }
 
-        return ToToolResult(session.ObserveExecution(new ExecutionObservationRequest(
-            frameCount,
-            parsedButtons.Value,
-            parsedProbes,
-            includePpuState,
-            tracePpuWrites,
-            maxPpuEvents,
-            parsedRegisters.Value)));
+        return ToExecutionToolResult(
+            session,
+            session.ObserveExecution(new ExecutionObservationRequest(
+                frameCount,
+                parsedButtons.Value,
+                parsedProbes,
+                includePpuState,
+                tracePpuWrites,
+                maxPpuEvents,
+                parsedRegisters.Value)));
     }
 
     [McpServerTool(Name = "run_input_timeline", ReadOnly = false, Destructive = false)]
@@ -719,7 +723,7 @@ public static class NesDebugTools
             });
         }
 
-        return ToToolResult(session.RunInputTimeline(normalized));
+        return ToExecutionToolResult(session, session.RunInputTimeline(normalized));
     }
 
     [McpServerTool(Name = "dump_nametables", ReadOnly = true, Destructive = false)]
@@ -908,7 +912,7 @@ public static class NesDebugTools
         var registers = session.ReadRegisters();
         var ppu = session.ReadPpuState();
         return new ScreenCaptureMetadata(
-            state.IsSuccess ? state.Value.Timeline : new TimelineCounters(0, 0),
+            state.IsSuccess ? state.Value.Timeline : new TimelineCounters(0, 0, 0),
             registers.IsSuccess ? registers.Value : null,
             ppu.IsSuccess ? ppu.Value : null,
             state.IsSuccess ? state.Value.Title : null,
@@ -961,6 +965,30 @@ public static class NesDebugTools
         };
 
     private static object ToToolResult<T>(DebugResult<T> result) => result.IsSuccess ? result.Value! : new ToolError(result.Error!);
+
+    private static object ToExecutionToolResult<T>(INesDebugSession session, DebugResult<T> result)
+    {
+        if (result.IsSuccess)
+        {
+            return result.Value!;
+        }
+
+        var state = session.GetState();
+        if (!state.IsSuccess ||
+            string.IsNullOrWhiteSpace(state.Value.Backend) ||
+            string.IsNullOrWhiteSpace(state.Value.BackendVersion))
+        {
+            return new ToolError(result.Error!);
+        }
+
+        return new ToolError(
+            result.Error!,
+            new ExecutionFailureDiagnostics(
+                state.Value.Backend,
+                state.Value.BackendVersion,
+                ServerVersion,
+                state.Value.DebugCycleLimit));
+    }
 
     private static ToolError Error(string code, string message) => new(new DebugError(code, message));
 

@@ -8,7 +8,7 @@ namespace Nes.Debug.Tests;
 public sealed class PackagedAprNesStdioSmokeTests
 {
     [Fact]
-    public async Task Packaged_stdio_server_loads_and_advances_nrom_with_json_only_stdout()
+    public async Task Packaged_release_stdio_server_runs_default_aprnes_advanced_workflow_with_json_only_stdout()
     {
         using var workspace = new TemporaryDirectory();
         var repositoryRoot = FindRepositoryRoot();
@@ -16,7 +16,7 @@ public sealed class PackagedAprNesStdioSmokeTests
         var extractedDirectory = Directory.CreateDirectory(Path.Combine(workspace.Path, "tool")).FullName;
         var artifactsDirectory = Path.Combine(workspace.Path, "artifacts");
         var projectPath = Path.Combine(repositoryRoot, "src", "Nes.Debug.Mcp", "Nes.Debug.Mcp.csproj");
-        var configuration = GetBuildConfiguration();
+        const string configuration = "Release";
 
         var pack = await RunProcessAsync(
             "dotnet",
@@ -34,14 +34,24 @@ public sealed class PackagedAprNesStdioSmokeTests
         Assert.True(pack.ExitCode == 0, $"dotnet pack failed.\nstdout:\n{pack.Stdout}\nstderr:\n{pack.Stderr}");
 
         var package = Assert.Single(Directory.GetFiles(packageDirectory, "Nes.Mcp.*.nupkg"));
+        using (var archive = ZipFile.OpenRead(package))
+        {
+            Assert.DoesNotContain(
+                archive.Entries,
+                entry => entry.FullName.Contains("adnes", StringComparison.OrdinalIgnoreCase));
+        }
+
         ZipFile.ExtractToDirectory(package, extractedDirectory);
         var serverAssembly = Directory.GetFiles(extractedDirectory, "Nes.Mcp.dll", SearchOption.AllDirectories).Single();
 
-        var fixture = NromTestRomBuilder.CreateProgram(
+        var program = new List<byte>();
+        program.AddRange(NromTestRomBuilder.PpuWrite(0x2000, 0x80));
+        program.AddRange(
         [
             0xE6, 0x00,       // INC $00
             0x4C, 0x00, 0x80, // JMP $8000
-        ], prgRomBanks: 1, chrRomBanks: 1);
+        ]);
+        var fixture = NromTestRomBuilder.CreateProgram(program.ToArray(), prgRomBanks: 1, chrRomBanks: 1);
         using var rom = TemporaryTestFile.FromBytes(fixture.Bytes);
 
         using var server = StartServer(serverAssembly, repositoryRoot);
@@ -99,7 +109,11 @@ public sealed class PackagedAprNesStdioSmokeTests
                     },
                 });
             var state = await ReadResponseAsync(server, 3, TimeSpan.FromSeconds(10));
-            AssertToolResponseContains(state, "\"backend\":\"AprNes\"");
+            var statePayload = ReadToolPayload(state);
+            Assert.Equal("AprNes", statePayload.GetProperty("backend").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(statePayload.GetProperty("backendVersion").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(statePayload.GetProperty("serverVersion").GetString()));
+            Assert.Equal(1024, statePayload.GetProperty("debugCycleLimit").GetInt32());
 
             await SendAsync(server,
                 new
@@ -109,12 +123,84 @@ public sealed class PackagedAprNesStdioSmokeTests
                     method = "tools/call",
                     @params = new
                     {
+                        name = "step_instruction",
+                        arguments = new { count = 1 },
+                    },
+                });
+            var step = ReadToolPayload(await ReadResponseAsync(server, 4, TimeSpan.FromSeconds(10)));
+            Assert.Equal(1, step.GetProperty("instructionsRun").GetInt32());
+
+            await SendAsync(server,
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = 5,
+                    method = "tools/call",
+                    @params = new
+                    {
                         name = "run_frame",
                         arguments = new { count = 1 },
                     },
                 });
-            var frame = await ReadResponseAsync(server, 4, TimeSpan.FromSeconds(10));
-            AssertToolResponseContains(frame, "\"framesRun\":1");
+            var frame = ReadToolPayload(await ReadResponseAsync(server, 5, TimeSpan.FromSeconds(10)));
+            Assert.Equal(1, frame.GetProperty("framesRun").GetInt32());
+
+            await SendAsync(server,
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = 6,
+                    method = "tools/call",
+                    @params = new
+                    {
+                        name = "trace_ppu_register_writes",
+                        arguments = new
+                        {
+                            frameCount = 1,
+                            maxEvents = 4,
+                            registers = new[] { "PPUCTRL", "PPUSCROLL", "PPUADDR", "PPUDATA" },
+                            buttons = Array.Empty<string>(),
+                        },
+                    },
+                });
+            var trace = ReadToolPayload(await ReadResponseAsync(server, 6, TimeSpan.FromSeconds(10)));
+            Assert.Equal(1, trace.GetProperty("framesRun").GetInt32());
+            Assert.Equal("framesComplete", trace.GetProperty("stopReason").GetString());
+            Assert.InRange(trace.GetProperty("eventCount").GetInt32(), 1, 4);
+            Assert.Equal(trace.GetProperty("eventCount").GetInt32(), trace.GetProperty("events").GetArrayLength());
+
+            await SendAsync(server,
+                new
+                {
+                    jsonrpc = "2.0",
+                    id = 7,
+                    method = "tools/call",
+                    @params = new
+                    {
+                        name = "observe_execution",
+                        arguments = new
+                        {
+                            frameCount = 1,
+                            buttons = Array.Empty<string>(),
+                            memoryProbes = new[] { new { address = "0x0000", length = 1 } },
+                            includePpuState = true,
+                            tracePpuWrites = true,
+                            maxPpuEvents = 4,
+                            ppuRegisters = new[] { "PPUCTRL", "PPUSCROLL", "PPUADDR", "PPUDATA" },
+                        },
+                    },
+                });
+            var observation = ReadToolPayload(await ReadResponseAsync(server, 7, TimeSpan.FromSeconds(10)));
+            Assert.Equal(1, observation.GetProperty("framesRun").GetInt32());
+            Assert.Equal("framesComplete", observation.GetProperty("stopReason").GetString());
+            Assert.Single(observation.GetProperty("frames").EnumerateArray());
+            Assert.Equal(4, observation.GetProperty("initialNametables").GetProperty("nametables").GetArrayLength());
+            Assert.Equal(4, observation.GetProperty("finalNametables").GetProperty("nametables").GetArrayLength());
+            Assert.Equal(600, observation.GetProperty("limits").GetProperty("maxFrames").GetInt32());
+            Assert.InRange(observation.GetProperty("ppuEventCount").GetInt32(), 1, 4);
+            Assert.Equal(
+                observation.GetProperty("ppuEventCount").GetInt32(),
+                observation.GetProperty("ppuEvents").GetArrayLength());
 
             server.StandardInput.Close();
             await server.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
@@ -130,6 +216,7 @@ public sealed class PackagedAprNesStdioSmokeTests
                 await server.WaitForExitAsync();
             }
         }
+
     }
 
     private static Process StartServer(string serverAssembly, string workingDirectory)
@@ -143,7 +230,6 @@ public sealed class PackagedAprNesStdioSmokeTests
             UseShellExecute = false,
         };
         startInfo.ArgumentList.Add(serverAssembly);
-        startInfo.Environment["NES_MCP_EMULATOR_BACKEND"] = "aprnes";
         var process = Process.Start(startInfo);
         return process ?? throw new InvalidOperationException("Failed to start the packaged MCP server.");
     }
@@ -199,6 +285,18 @@ public sealed class PackagedAprNesStdioSmokeTests
         Assert.Contains(expected, text, StringComparison.Ordinal);
     }
 
+    private static JsonElement ReadToolPayload(JsonElement response)
+    {
+        Assert.False(response.TryGetProperty("error", out _), response.GetRawText());
+        var content = response.GetProperty("result").GetProperty("content");
+        var text = Assert.Single(content.EnumerateArray()).GetProperty("text").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(text));
+        using var document = JsonDocument.Parse(text!);
+        var payload = document.RootElement.Clone();
+        Assert.False(payload.TryGetProperty("error", out _), payload.GetRawText());
+        return payload;
+    }
+
     private static async Task<ProcessResult> RunProcessAsync(
         string fileName,
         string workingDirectory,
@@ -248,13 +346,6 @@ public sealed class PackagedAprNesStdioSmokeTests
         }
 
         throw new DirectoryNotFoundException("Could not locate the NesMcp repository root.");
-    }
-
-    private static string GetBuildConfiguration()
-    {
-        var targetFrameworkDirectory = new DirectoryInfo(AppContext.BaseDirectory);
-        return targetFrameworkDirectory.Parent?.Name
-            ?? throw new DirectoryNotFoundException("Could not determine the active test build configuration.");
     }
 
     private sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);

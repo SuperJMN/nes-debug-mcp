@@ -1,5 +1,7 @@
+using System.Text.Json;
 using Nes.Debug.Core;
 using Nes.Debug.Emulator;
+using Nes.Debug.Mcp;
 
 namespace Nes.Debug.Tests;
 
@@ -30,21 +32,6 @@ public sealed class AprNesDebugSessionTests : NromSessionConformanceTests<AprNes
         Assert.Equal("0x42", step.Value.Registers.A);
         Assert.Equal("0x8002", step.Value.Registers.Pc);
         Assert.Equal("A9 42", memory.Value.BytesHex);
-    }
-
-    [Fact]
-    public void Auto_backend_uses_aprnes_for_mapper4()
-    {
-        using var temp = new TempRom(CreateMinimalMmc3());
-        using var session = new AutoNesDebugSession(new ManagedNesDebugSession(), new AprNesDebugSession());
-
-        var load = session.LoadRom(temp.Path);
-        var step = session.StepInstruction(1);
-
-        Assert.True(load.IsSuccess, load.Error?.Message);
-        Assert.True(step.IsSuccess, step.Error?.Message);
-        Assert.Equal(4, load.Value.Mapper);
-        Assert.Equal("0x42", step.Value.Registers.A);
     }
 
     [Fact]
@@ -345,7 +332,6 @@ public sealed class AprNesDebugSessionTests : NromSessionConformanceTests<AprNes
         Assert.Equal("0xFF", ppu.Value.PpuCtrl);
         Assert.Equal("0xFF", ppu.Value.PpuMask);
         Assert.Equal("0x84", ppu.Value.OamAddr);
-        Assert.Null(ppu.Value.PpuScroll);
         Assert.Equal(3, ppu.Value.Control.NametableSelect);
         Assert.Equal("0x2C00", ppu.Value.Control.NametableAddress);
         Assert.Equal(32, ppu.Value.Control.VramIncrement);
@@ -363,7 +349,7 @@ public sealed class AprNesDebugSessionTests : NromSessionConformanceTests<AprNes
         Assert.True(ppu.Value.Mask.EmphasizeBlue);
         Assert.Equal(ppu.Value.Status.VBlank, ppu.Value.VBlank);
         Assert.Equal(step.Value.Timeline, ppu.Value.Timeline);
-        Assert.Equal(ppu.Value.PpuAddr, ppu.Value.V);
+        Assert.InRange(ppu.Value.Dot, 0, 340);
     }
 
     [Fact]
@@ -584,6 +570,31 @@ public sealed class AprNesDebugSessionTests : NromSessionConformanceTests<AprNes
         Assert.Contains("limit=1024 CPU cycles", run.Error?.Message, StringComparison.Ordinal);
         Assert.Contains("oamDma=false", run.Error?.Message, StringComparison.Ordinal);
         Assert.Contains("dmcDma=false", run.Error?.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Mcp_run_frame_failure_serializes_aprnes_build_server_and_debug_limit_diagnostics()
+    {
+        using var temp = new TempRom(CreateProgramMmc3([0x02])); // HLT/JAM
+        using var session = new AprNesDebugSession();
+        var load = session.LoadRom(temp.Path);
+
+        var result = NesDebugTools.RunFrame(session, 1);
+
+        Assert.True(load.IsSuccess, load.Error?.Message);
+        var error = Assert.IsType<ToolError>(result);
+        Assert.Equal("run_frame_failed", error.Error.Code);
+        Assert.NotNull(error.Diagnostics);
+        Assert.Equal("AprNes", error.Diagnostics.Backend);
+        Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.BackendVersion));
+        Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.ServerVersion));
+        Assert.Equal(1024, error.Diagnostics.DebugCycleLimit);
+
+        var json = JsonSerializer.Serialize(error);
+        Assert.Contains("\"backend\":\"AprNes\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"backendVersion\":", json, StringComparison.Ordinal);
+        Assert.Contains("\"serverVersion\":", json, StringComparison.Ordinal);
+        Assert.Contains("\"debugCycleLimit\":1024", json, StringComparison.Ordinal);
     }
 
     [Fact]
