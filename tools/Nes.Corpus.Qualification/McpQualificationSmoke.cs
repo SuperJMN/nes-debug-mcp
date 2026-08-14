@@ -16,8 +16,6 @@ internal sealed record SmokeResult(
 
 internal static class McpQualificationSmoke
 {
-    private const int AdnesMaximumInstructionsPerFrame = 1_000_000;
-
     private static readonly string[] PpuRegisters =
     [
         "PPUCTRL",
@@ -35,28 +33,20 @@ internal static class McpQualificationSmoke
         string romPath,
         string statePath,
         int headerMapper,
-        QualificationLaunchMode launchMode,
         QualificationBounds bounds,
         CancellationToken cancellationToken)
     {
-        await using var client = McpStdioClient.Start(serverAssembly, launchMode);
+        await using var client = McpStdioClient.Start(serverAssembly);
         if (client is null)
         {
             return SmokeResult.Failure(FailureCategory.WorkerCrash);
         }
 
-        var expectedBackend = launchMode switch
-        {
-            QualificationLaunchMode.PrimaryDefault => QualificationBackend.AprNes,
-            QualificationLaunchMode.Adnes => QualificationBackend.Adnes,
-            _ => throw new ArgumentOutOfRangeException(nameof(launchMode)),
-        };
         var result = await RunCoreAsync(
             client,
             romPath,
             statePath,
             headerMapper,
-            expectedBackend,
             bounds,
             cancellationToken).ConfigureAwait(false);
 
@@ -75,7 +65,6 @@ internal static class McpQualificationSmoke
         string romPath,
         string statePath,
         int headerMapper,
-        QualificationBackend backend,
         QualificationBounds bounds,
         CancellationToken cancellationToken)
     {
@@ -90,7 +79,7 @@ internal static class McpQualificationSmoke
             return SmokeResult.Failure(FailureCategory.Load);
         }
 
-        var identity = await ReadIdentityAsync(client, headerMapper, backend, cancellationToken).ConfigureAwait(false);
+        var identity = await ReadIdentityAsync(client, headerMapper, cancellationToken).ConfigureAwait(false);
         if (identity is null)
         {
             return SmokeResult.Failure(FailureCategory.Identity);
@@ -102,16 +91,6 @@ internal static class McpQualificationSmoke
             return SmokeResult.Failure(FailureCategory.Reset);
         }
 
-        BehaviorSnapshot? adnesBefore = null;
-        if (backend == QualificationBackend.Adnes)
-        {
-            adnesBefore = await CaptureBehaviorSnapshotAsync(client, cancellationToken).ConfigureAwait(false);
-            if (adnesBefore is null)
-            {
-                return SmokeResult.Failure(FailureCategory.IndependentSmoke);
-            }
-        }
-
         var stepCount = Math.Min(1, bounds.MaxInstructions);
         var step = await client.CallJsonAsync("step_instruction", new { count = stepCount }, cancellationToken).ConfigureAwait(false);
         if (!step.IsSuccess || !TryGetInt32(step.Payload, "instructionsRun", out var instructionsRun) ||
@@ -120,62 +99,30 @@ internal static class McpQualificationSmoke
             return SmokeResult.Failure(FailureCategory.InstructionExecution);
         }
 
-        BehaviorSnapshot? adnesAfterStep = null;
-        if (backend == QualificationBackend.Adnes)
-        {
-            adnesAfterStep = await CaptureBehaviorSnapshotAsync(client, cancellationToken).ConfigureAwait(false);
-            if (adnesAfterStep is null ||
-                !HasBoundedInstructionProgress(adnesBefore!, adnesAfterStep, (ulong)stepCount))
-            {
-                return SmokeResult.Failure(FailureCategory.InstructionExecution);
-            }
-        }
-
         var frameCount = Math.Min(1, bounds.MaxFrames);
         var frame = await client.CallJsonAsync("run_frame", new { count = frameCount }, cancellationToken).ConfigureAwait(false);
-        if (!frame.IsSuccess || !IsInt32(frame.Payload, "framesRun", frameCount) ||
-            backend == QualificationBackend.Adnes &&
-            (!TryReadTimeline(frame.Payload, out var adnesFrameTimeline) ||
-             !HasBoundedFrameProgress(adnesAfterStep!.Timeline, adnesFrameTimeline, frameCount)))
+        if (!frame.IsSuccess || !IsInt32(frame.Payload, "framesRun", frameCount))
         {
             return SmokeResult.Failure(FailureCategory.FrameExecution);
-        }
-
-        if (backend == QualificationBackend.Adnes)
-        {
-            var held = await client.CallJsonAsync(
-                "set_controller",
-                new { buttons = new[] { "a" } },
-                cancellationToken).ConfigureAwait(false);
-            if (!held.IsSuccess || !IsControllerState(held.Payload, aPressed: true))
-            {
-                return SmokeResult.Failure(FailureCategory.ControllerInput);
-            }
         }
 
         var input = await client.CallJsonAsync(
             "press_buttons",
             new { buttons = new[] { "a" }, frameCount },
             cancellationToken).ConfigureAwait(false);
-        if (!input.IsSuccess || !IsInt32(input.Payload, "framesRun", frameCount) ||
-            backend == QualificationBackend.Adnes &&
-            (!input.Payload.TryGetProperty("released", out var released) ||
-             !IsControllerState(released, aPressed: false)))
+        if (!input.IsSuccess || !IsInt32(input.Payload, "framesRun", frameCount))
         {
             return SmokeResult.Failure(FailureCategory.ControllerInput);
         }
 
-        if (backend == QualificationBackend.AprNes)
+        var instructionBoundFailure = await ExerciseInstructionBoundAsync(
+            client,
+            bounds.MaxInstructions,
+            frameCount,
+            cancellationToken).ConfigureAwait(false);
+        if (instructionBoundFailure.HasValue)
         {
-            var instructionBoundFailure = await ExerciseInstructionBoundAsync(
-                client,
-                bounds.MaxInstructions,
-                frameCount,
-                cancellationToken).ConfigureAwait(false);
-            if (instructionBoundFailure.HasValue)
-            {
-                return SmokeResult.Failure(instructionBoundFailure.Value);
-            }
+            return SmokeResult.Failure(instructionBoundFailure.Value);
         }
 
         var registers = await client.CallJsonAsync("read_registers", new { }, cancellationToken).ConfigureAwait(false);
@@ -196,38 +143,16 @@ internal static class McpQualificationSmoke
             return SmokeResult.Failure(FailureCategory.ScreenCapture);
         }
 
-        if (backend == QualificationBackend.Adnes)
+        var traceFailure = await ExerciseTraceAsync(client, frameCount, bounds.MaxTraceEvents, cancellationToken).ConfigureAwait(false);
+        if (traceFailure.HasValue)
         {
-            var finalState = await client.CallJsonAsync("get_state", new { }, cancellationToken).ConfigureAwait(false);
-            if (!finalState.IsSuccess ||
-                !TryReadTimeline(finalState.Payload, out var finalTimeline) ||
-                !TryReadTimeline(frame.Payload, out var frameTimeline) ||
-                !HasBoundedFrameProgress(frameTimeline, finalTimeline, frameCount) ||
-                !TryGetUInt64(registers.Payload, "cycles", out var finalCpuCycles) ||
-                !TryGetUInt64(ppu.Payload, "ppuCycles", out var finalPpuCycles) ||
-                finalCpuCycles <= adnesAfterStep!.CpuCycles ||
-                finalPpuCycles <= adnesAfterStep.PpuCycles)
-            {
-                return SmokeResult.Failure(FailureCategory.IndependentSmoke);
-            }
+            return SmokeResult.Failure(traceFailure.Value);
         }
 
-        if (backend == QualificationBackend.AprNes)
+        var replayFailure = await ExerciseReplayAsync(client, statePath, frameCount, cancellationToken).ConfigureAwait(false);
+        if (replayFailure.HasValue)
         {
-            var traceFailure = await ExerciseTraceAsync(client, frameCount, bounds.MaxTraceEvents, cancellationToken).ConfigureAwait(false);
-            if (traceFailure.HasValue)
-            {
-                return SmokeResult.Failure(traceFailure.Value);
-            }
-        }
-
-        if (backend == QualificationBackend.AprNes)
-        {
-            var replayFailure = await ExerciseReplayAsync(client, statePath, frameCount, cancellationToken).ConfigureAwait(false);
-            if (replayFailure.HasValue)
-            {
-                return SmokeResult.Failure(replayFailure.Value);
-            }
+            return SmokeResult.Failure(replayFailure.Value);
         }
 
         return SmokeResult.Success(identity.BackendVersion, identity.ServerVersion);
@@ -236,7 +161,6 @@ internal static class McpQualificationSmoke
     private static async Task<IdentitySnapshot?> ReadIdentityAsync(
         McpStdioClient client,
         int headerMapper,
-        QualificationBackend backend,
         CancellationToken cancellationToken)
     {
         var state = await client.CallJsonAsync("get_state", new { }, cancellationToken).ConfigureAwait(false);
@@ -244,7 +168,7 @@ internal static class McpQualificationSmoke
             !IsTrue(state.Payload, "romLoaded") ||
             !IsInt32(state.Payload, "mapper", headerMapper) ||
             !TryGetString(state.Payload, "backend", out var backendName) ||
-            backendName != (backend == QualificationBackend.AprNes ? "AprNes" : "ADNES") ||
+            backendName != "AprNes" ||
             !TryGetString(state.Payload, "backendVersion", out var backendVersion) ||
             !TryGetString(state.Payload, "serverVersion", out var serverVersion) ||
             !WorkerProtocol.IsSafeVersion(backendVersion) ||
@@ -254,15 +178,9 @@ internal static class McpQualificationSmoke
             return null;
         }
 
-        int? debugCycleLimit = null;
-        if (backend == QualificationBackend.AprNes)
+        if (!TryGetInt32(state.Payload, "debugCycleLimit", out var debugCycleLimit) || debugCycleLimit < 1)
         {
-            if (!TryGetInt32(state.Payload, "debugCycleLimit", out var limit) || limit < 1)
-            {
-                return null;
-            }
-
-            debugCycleLimit = limit;
+            return null;
         }
 
         // Deliberately do not read or clone title or any other identity field.
@@ -478,75 +396,6 @@ internal static class McpQualificationSmoke
             capture.Data);
     }
 
-    private static async Task<BehaviorSnapshot?> CaptureBehaviorSnapshotAsync(
-        McpStdioClient client,
-        CancellationToken cancellationToken)
-    {
-        var state = await client.CallJsonAsync("get_state", new { }, cancellationToken).ConfigureAwait(false);
-        var registers = await client.CallJsonAsync("read_registers", new { }, cancellationToken).ConfigureAwait(false);
-        var ppu = await client.CallJsonAsync("read_ppu_state", new { }, cancellationToken).ConfigureAwait(false);
-        if (!state.IsSuccess || !TryReadTimeline(state.Payload, out var timeline) ||
-            !registers.IsSuccess || !IsRegisterPayload(registers.Payload) ||
-            !TryGetUInt64(registers.Payload, "cycles", out var cpuCycles) ||
-            !ppu.IsSuccess || !IsPpuPayload(ppu.Payload) ||
-            !TryGetUInt64(ppu.Payload, "ppuCycles", out var ppuCycles))
-        {
-            return null;
-        }
-
-        return new BehaviorSnapshot(timeline, cpuCycles, ppuCycles);
-    }
-
-    private static bool HasBoundedInstructionProgress(
-        BehaviorSnapshot before,
-        BehaviorSnapshot after,
-        ulong expectedInstructions) =>
-        after.Timeline.Instructions >= before.Timeline.Instructions &&
-        after.Timeline.Instructions - before.Timeline.Instructions == expectedInstructions &&
-        after.Timeline.Frames >= before.Timeline.Frames &&
-        after.Timeline.Frames - before.Timeline.Frames <= 1 &&
-        after.Timeline.Cycles > before.Timeline.Cycles &&
-        after.CpuCycles > before.CpuCycles &&
-        after.PpuCycles > before.PpuCycles;
-
-    private static bool HasBoundedFrameProgress(
-        TimelineSnapshot before,
-        TimelineSnapshot after,
-        int expectedFrames) =>
-        after.Frames >= before.Frames &&
-        after.Frames - before.Frames == (ulong)expectedFrames &&
-        after.Cycles > before.Cycles &&
-        after.Instructions > before.Instructions &&
-        after.Instructions - before.Instructions <=
-            (ulong)expectedFrames * AdnesMaximumInstructionsPerFrame;
-
-    private static bool IsControllerState(JsonElement payload, bool aPressed)
-    {
-        if (!TryGetBoolean(payload, "a", out var a) || a != aPressed ||
-            !payload.TryGetProperty("pressed", out var pressed) ||
-            pressed.ValueKind != JsonValueKind.Array)
-        {
-            return false;
-        }
-
-        var expectedPressedCount = aPressed ? 1 : 0;
-        if (pressed.GetArrayLength() != expectedPressedCount ||
-            aPressed && (pressed[0].ValueKind != JsonValueKind.String || pressed[0].GetString() != "a"))
-        {
-            return false;
-        }
-
-        foreach (var name in new[] { "b", "select", "start", "up", "down", "left", "right" })
-        {
-            if (!TryGetBoolean(payload, name, out var value) || value)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     private static bool IsRegisterPayload(JsonElement payload) =>
         TryGetString(payload, "a", out _) &&
         TryGetString(payload, "x", out _) &&
@@ -657,8 +506,6 @@ internal static class McpQualificationSmoke
     }
 
     private sealed record IdentitySnapshot(string BackendVersion, string ServerVersion, int? DebugCycleLimit);
-
-    private sealed record BehaviorSnapshot(TimelineSnapshot Timeline, ulong CpuCycles, ulong PpuCycles);
 
     private readonly record struct TimelineSnapshot(ulong Frames, ulong Cycles, ulong Instructions);
 

@@ -4,16 +4,6 @@
 
 ## Vendored Emulator Cores
 
-### ADNES
-
-- Path: `src/Nes.Debug.Emulator/Adnes/`
-- Upstream: https://github.com/enusbaum/ADNES
-- Author: Eric P. Nusbaum
-- License: MIT
-- License file: `src/Nes.Debug.Emulator/ADNES-LICENSE.txt`
-
-ADNES is still included in the current package, with its source and license intact, as a temporary explicit fallback selected with `NES_MCP_EMULATOR_BACKEND=adnes`. The default, legacy `auto`, and explicit `aprnes` paths use AprNes directly for every supported mapper.
-
 ### AprNes
 
 - Path: `src/Nes.Debug.Emulator/AprNes/NesCore/`

@@ -55,9 +55,10 @@ public sealed class CorpusQualificationProtocolTests
         [
             "schemaVersion", "succeeded", "discovered", "valid", "attempted", "passed", "failed",
             "headerMappers", "skipped", "failureCategories", "totalElapsedMilliseconds",
-            "maximumRomElapsedMilliseconds", "backends", "bounds", "expected", "independentSmoke",
+            "maximumRomElapsedMilliseconds", "backends", "bounds", "expected",
         ],
             document.RootElement.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(3, document.RootElement.GetProperty("schemaVersion").GetInt32());
     }
 
     [Fact]
@@ -90,13 +91,5 @@ public sealed class CorpusQualificationProtocolTests
         MaximumRomElapsedMilliseconds: 20,
         Backends: [new BackendIdentity(QualificationBackend.AprNes, "backend-build", "server-build")],
         Bounds: new QualificationBounds(30, 10, 1024, 4, 10000, 128),
-        Expected: new ExpectedCohort(3, new SortedDictionary<int, int> { [0] = 3 }),
-        IndependentSmoke: new IndependentSmokeCoverage(
-            QualificationBackend.Adnes,
-            "backend-build",
-            "server-build",
-            1,
-            1,
-            0,
-            [new MapperOutcome(0, 1, 1, 0)]));
+        Expected: new ExpectedCohort(3, new SortedDictionary<int, int> { [0] = 3 }));
 }

@@ -15,9 +15,9 @@ dotnet tools/Nes.Corpus.Qualification/bin/Release/net10.0/Nes.Corpus.Qualificati
   [--expect-mapper <header-mapper>=<count> ...]
 ```
 
-The expected per-mapper counts are mandatory and must sum to `--expected-total`. A missing or unexpected cohort, a qualification failure, a timeout, a worker/protocol failure, or incomplete independent mapper 0-3 coverage produces a nonzero exit code.
+The expected per-mapper counts are mandatory and must sum to `--expected-total`. A missing or unexpected cohort, a qualification failure, a timeout, or a worker/protocol failure produces a nonzero exit code.
 
-The primary cohort launches each packaged MCP server with `NES_MCP_EMULATOR_BACKEND` absent, even if the qualification parent inherited that variable, and accepts the run only when `get_state` observes AprNes plus safe backend/server versions and its debug-cycle limit. The independent mapper 0-3 recovery smoke remains a separate forced `adnes` launch. The aggregate reports the observed AprNes and ADNES identities, not these internal launch modes.
+Every worker launches the MCP server with `NES_MCP_EMULATOR_BACKEND` absent, even if the qualification parent inherited that variable, and accepts the run only when `get_state` observes AprNes plus safe backend/server versions and its debug-cycle limit. The aggregate reports only the observed AprNes identity.
 
 ## Configuration
 
@@ -36,17 +36,16 @@ The schema also records the fixed workflow envelope: six frame operations, two i
 
 ## Aggregate schema
 
-Schema version 2 contains only:
+Schema version 3 contains only:
 
-- an explicit `succeeded` gate, true only when AprNes, expected-cohort, and independent ADNES gates all pass;
+- an explicit `succeeded` gate, true only when the AprNes workflow and expected-cohort gates pass;
 - discovery, valid, attempted, passed, and failed totals;
 - attempted/passed/failed counts by raw iNES/NES 2.0 header mapper;
 - closed skipped and failure-category counts, with an optional header mapper on failures;
 - total and maximum per-ROM elapsed milliseconds;
-- AprNes and ADNES backend/server build versions;
+- the AprNes backend/server build version;
 - configured and fixed workflow bounds;
-- the expected total and per-header-mapper cohort;
-- independent ADNES attempted/passed/failed counts by header mapper 0-3.
+- the expected total and per-header-mapper cohort.
 
 Structurally valid trainer and NES 2.0 images count as valid and attempted, but currently fail with `UnsupportedFormat` before an emulator starts. They are never reported as skipped.
 

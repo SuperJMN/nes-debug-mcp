@@ -7,7 +7,7 @@ namespace Nes.Debug.Tests;
 public sealed class QualificationCoordinatorTests
 {
     [Fact]
-    public async Task Generated_mapper_zero_through_three_corpus_passes_both_backends_and_stays_immutable()
+    public async Task Generated_mapper_zero_through_three_corpus_passes_aprnes_and_stays_immutable()
     {
         using var corpus = new TemporaryCorpus();
         var program = CreateObservableLoop();
@@ -35,10 +35,6 @@ public sealed class QualificationCoordinatorTests
         Assert.Equal(4, run.Report.Passed);
         Assert.Equal(0, run.Report.Failed);
         Assert.All(run.Report.HeaderMappers, outcome => Assert.Equal((1, 1, 0), (outcome.Attempted, outcome.Passed, outcome.Failed)));
-        Assert.Equal(4, run.Report.IndependentSmoke.Attempted);
-        Assert.Equal(4, run.Report.IndependentSmoke.Passed);
-        Assert.Equal(0, run.Report.IndependentSmoke.Failed);
-        Assert.All(run.Report.IndependentSmoke.HeaderMappers, outcome => Assert.Equal((1, 1, 0), (outcome.Attempted, outcome.Passed, outcome.Failed)));
         Assert.Empty(run.Report.FailureCategories);
         Assert.Equal(before, corpus.Snapshot());
 
@@ -52,7 +48,7 @@ public sealed class QualificationCoordinatorTests
     }
 
     [Fact]
-    public async Task Missing_expected_cohort_and_independent_representatives_fail_closed()
+    public async Task Missing_expected_cohort_fails_closed()
     {
         using var corpus = new TemporaryCorpus();
         var options = Options(corpus.Path, 1, new SortedDictionary<int, int> { [0] = 1 });
@@ -64,29 +60,10 @@ public sealed class QualificationCoordinatorTests
         Assert.Equal(0, run.Report.Valid);
         Assert.Contains(run.Report.FailureCategories, failure =>
             failure.Category == FailureCategory.MissingCoverage && failure.HeaderMapper == 0);
-        Assert.Equal([0, 1, 2, 3], run.Report.IndependentSmoke.HeaderMappers.Select(item => item.HeaderMapper));
-        Assert.All(run.Report.IndependentSmoke.HeaderMappers, outcome => Assert.Equal(0, outcome.Attempted));
     }
 
     [Fact]
-    public void Independent_representative_prefers_a_supported_image_of_the_requested_mapper()
-    {
-        RomCandidate[] candidates =
-        [
-            new(new RomSource.Direct("trainer"), new RomImageHeader(0, 16, true, NesImageFormat.INes), 16),
-            new(new RomSource.Direct("nes20"), new RomImageHeader(0, 16, false, NesImageFormat.Nes20), 16),
-            new(new RomSource.Direct("supported"), new RomImageHeader(0, 16, false, NesImageFormat.INes), 16),
-        ];
-
-        var selected = QualificationCoordinator.SelectIndependentCandidate(candidates, 0);
-
-        Assert.NotNull(selected);
-        Assert.Equal(NesImageFormat.INes, selected.Header.Format);
-        Assert.False(selected.Header.HasTrainer);
-    }
-
-    [Fact]
-    public async Task Missing_independent_representatives_fails_success_gate_when_aprnes_and_cohort_pass()
+    public async Task Complete_single_mapper_cohort_needs_no_separate_backend_smoke()
     {
         using var corpus = new TemporaryCorpus();
         corpus.WriteDirect("only.nes", NromTestRomBuilder.CreateProgram(CreateObservableLoop()).Bytes);
@@ -94,12 +71,10 @@ public sealed class QualificationCoordinatorTests
 
         var run = await QualificationCoordinator.RunAsync(options, CancellationToken.None);
 
-        Assert.Equal(0, run.Report.Failed);
-        Assert.False(run.Report.Succeeded);
-        Assert.False(run.Succeeded);
-        Assert.DoesNotContain(run.Report.FailureCategories, failure => failure.HeaderMapper is null);
-        Assert.Contains(run.Report.FailureCategories, failure =>
-            failure is { Category: FailureCategory.MissingCoverage, HeaderMapper: 1 });
+        Assert.True(run.Succeeded, AggregateJson.Serialize(run.Report));
+        Assert.True(run.Report.Succeeded);
+        Assert.Equal((1, 1, 0), (run.Report.Attempted, run.Report.Passed, run.Report.Failed));
+        Assert.Empty(run.Report.FailureCategories);
     }
 
     [Fact]

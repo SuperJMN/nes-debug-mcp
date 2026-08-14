@@ -35,21 +35,6 @@ public sealed class AprNesDebugSessionTests : NromSessionConformanceTests<AprNes
     }
 
     [Fact]
-    public void Auto_backend_uses_aprnes_for_mapper4()
-    {
-        using var temp = new TempRom(CreateMinimalMmc3());
-        using var session = new AutoNesDebugSession(new ManagedNesDebugSession(), new AprNesDebugSession());
-
-        var load = session.LoadRom(temp.Path);
-        var step = session.StepInstruction(1);
-
-        Assert.True(load.IsSuccess, load.Error?.Message);
-        Assert.True(step.IsSuccess, step.Error?.Message);
-        Assert.Equal(4, load.Value.Mapper);
-        Assert.Equal("0x42", step.Value.Registers.A);
-    }
-
-    [Fact]
     public void Get_state_exposes_aprnes_runtime_diagnostics()
     {
         using var temp = new TempRom(CreateMinimalMmc3());

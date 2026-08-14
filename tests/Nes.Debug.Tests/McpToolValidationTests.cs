@@ -176,23 +176,23 @@ public sealed class McpToolValidationTests
     }
 
     [Fact]
-    public void Adnes_execution_failure_reports_identity_without_inventing_an_aprnes_cycle_limit()
+    public void Aprnes_execution_failure_reports_real_identity_and_cycle_limit()
     {
-        using var session = new ManagedNesDebugSession();
+        using var session = new AprNesDebugSession();
 
         var result = NesDebugTools.RunFrame(session, 1);
 
         var error = Assert.IsType<ToolError>(result);
         Assert.Equal("no_rom_loaded", error.Error.Code);
         Assert.NotNull(error.Diagnostics);
-        Assert.Equal("ADNES", error.Diagnostics.Backend);
+        Assert.Equal("AprNes", error.Diagnostics.Backend);
         Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.BackendVersion));
         Assert.False(string.IsNullOrWhiteSpace(error.Diagnostics.ServerVersion));
-        Assert.Null(error.Diagnostics.DebugCycleLimit);
+        Assert.Equal(1024, error.Diagnostics.DebugCycleLimit);
 
         var json = JsonSerializer.Serialize(error);
-        Assert.Contains("\"backend\":\"ADNES\"", json, StringComparison.Ordinal);
-        Assert.DoesNotContain("debugCycleLimit", json, StringComparison.Ordinal);
+        Assert.Contains("\"backend\":\"AprNes\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"debugCycleLimit\":1024", json, StringComparison.Ordinal);
     }
 
     [Fact]

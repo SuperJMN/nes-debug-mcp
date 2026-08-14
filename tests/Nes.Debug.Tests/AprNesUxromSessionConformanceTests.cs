@@ -62,22 +62,6 @@ public sealed class AprNesUxromSessionConformanceTests : NesDebugSessionConforma
     }
 
     [Fact]
-    public void Auto_routing_keeps_mapper_2_on_adnes()
-    {
-        var fixture = UxromTestRomBuilder.CreateBankSelectionFixture();
-        using var rom = TemporaryTestFile.FromBytes(fixture.Bytes);
-        using var session = new AutoNesDebugSession(new ManagedNesDebugSession(), new AprNesDebugSession());
-
-        var load = session.LoadRom(rom.Path);
-        var state = session.GetState();
-
-        AssertSuccess(load);
-        Assert.Equal(2, load.Value.Mapper);
-        AssertSuccess(state);
-        Assert.Equal("ADNES", state.Value.Backend);
-    }
-
-    [Fact]
     public void Switchable_and_fixed_prg_windows_select_reset_and_execute_expected_banks()
     {
         var fixture = UxromTestRomBuilder.CreateBankSelectionFixture(NromMirroring.Vertical);

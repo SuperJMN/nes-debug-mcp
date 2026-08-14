@@ -36,10 +36,10 @@ public sealed class McpStdioClientTests
     }
 
     [Fact]
-    public async Task Client_drives_full_stdio_protocol_with_forced_backend_and_discards_hostile_stderr()
+    public async Task Client_drives_full_stdio_protocol_and_discards_hostile_stderr()
     {
         var startInfo = QualificationTestChild.CreateMcpStartInfo("valid");
-        await using var client = McpStdioClient.Start(startInfo, QualificationLaunchMode.Adnes);
+        await using var client = McpStdioClient.Start(startInfo);
         Assert.NotNull(client);
 
         Assert.True(await client.InitializeAsync(CancellationToken.None));
@@ -49,7 +49,7 @@ public sealed class McpStdioClientTests
         var image = await client.CallImageAsync("image", new { }, CancellationToken.None);
 
         Assert.True(backend.IsSuccess);
-        Assert.Equal("adnes", backend.Payload.GetProperty("backend").GetString());
+        Assert.Equal(JsonValueKind.Null, backend.Payload.GetProperty("backend").ValueKind);
         Assert.True(json.IsSuccess);
         Assert.Equal(7, json.Payload.GetProperty("value").GetInt32());
         Assert.False(error.IsSuccess);
@@ -63,10 +63,10 @@ public sealed class McpStdioClientTests
     public async Task Primary_default_removes_an_inherited_backend_variable_before_starting_the_server()
     {
         var startInfo = QualificationTestChild.CreateMcpStartInfo("valid");
-        startInfo.Environment["NES_MCP_EMULATOR_BACKEND"] = "adnes";
+        startInfo.Environment["NES_MCP_EMULATOR_BACKEND"] = "aprnes";
         Assert.True(startInfo.Environment.ContainsKey("NES_MCP_EMULATOR_BACKEND"));
 
-        await using var client = McpStdioClient.Start(startInfo, QualificationLaunchMode.PrimaryDefault);
+        await using var client = McpStdioClient.Start(startInfo);
         Assert.NotNull(client);
         Assert.True(await client.InitializeAsync(CancellationToken.None));
 
@@ -82,7 +82,7 @@ public sealed class McpStdioClientTests
     public async Task Client_rejects_oversize_server_stdout_as_a_protocol_violation()
     {
         var startInfo = QualificationTestChild.CreateMcpStartInfo("oversize");
-        await using var client = McpStdioClient.Start(startInfo, QualificationLaunchMode.PrimaryDefault);
+        await using var client = McpStdioClient.Start(startInfo);
         Assert.NotNull(client);
 
         Assert.False(await client.InitializeAsync(CancellationToken.None));
@@ -101,7 +101,7 @@ public sealed class McpStdioClientTests
     public async Task Client_rejects_invalid_json_rpc_initialize_envelopes(string mode)
     {
         var startInfo = QualificationTestChild.CreateMcpStartInfo(mode);
-        await using var client = McpStdioClient.Start(startInfo, QualificationLaunchMode.PrimaryDefault);
+        await using var client = McpStdioClient.Start(startInfo);
         Assert.NotNull(client);
 
         Assert.False(await client.InitializeAsync(CancellationToken.None));
@@ -111,7 +111,7 @@ public sealed class McpStdioClientTests
     public async Task Client_distinguishes_a_server_crash_from_clean_end_of_output()
     {
         var startInfo = QualificationTestChild.CreateMcpStartInfo("crash");
-        await using var client = McpStdioClient.Start(startInfo, QualificationLaunchMode.PrimaryDefault);
+        await using var client = McpStdioClient.Start(startInfo);
         Assert.NotNull(client);
 
         Assert.True(await client.InitializeAsync(CancellationToken.None));
@@ -131,7 +131,7 @@ public sealed class McpStdioClientTests
     public async Task Stop_kills_a_server_that_stays_alive_after_input_closes()
     {
         var startInfo = QualificationTestChild.CreateMcpStartInfo("hang-after-input");
-        await using var client = McpStdioClient.Start(startInfo, QualificationLaunchMode.PrimaryDefault);
+        await using var client = McpStdioClient.Start(startInfo);
         Assert.NotNull(client);
         Assert.True(await client.InitializeAsync(CancellationToken.None));
         var response = await client.CallJsonAsync("pid", new { }, CancellationToken.None);
@@ -148,7 +148,7 @@ public sealed class McpStdioClientTests
     public async Task Dispose_is_bounded_and_kills_a_server_that_ignores_closed_input()
     {
         var startInfo = QualificationTestChild.CreateMcpStartInfo("hang-after-input");
-        var client = McpStdioClient.Start(startInfo, QualificationLaunchMode.PrimaryDefault);
+        var client = McpStdioClient.Start(startInfo);
         Assert.NotNull(client);
         Assert.True(await client.InitializeAsync(CancellationToken.None));
         var response = await client.CallJsonAsync("pid", new { }, CancellationToken.None);

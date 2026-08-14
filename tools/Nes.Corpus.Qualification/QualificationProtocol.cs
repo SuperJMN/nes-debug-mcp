@@ -7,7 +7,6 @@ namespace Nes.Corpus.Qualification;
 public enum QualificationBackend
 {
     AprNes,
-    Adnes,
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<FailureCategory>))]
@@ -47,7 +46,6 @@ public enum FailureCategory
     McpStdoutOverflow,
     McpShutdown,
     SaveStateReplay,
-    IndependentSmoke,
     MissingCoverage,
 }
 
@@ -94,15 +92,6 @@ public sealed record BackendIdentity(
     string BackendVersion,
     string ServerVersion);
 
-public sealed record IndependentSmokeCoverage(
-    QualificationBackend Backend,
-    string BackendVersion,
-    string ServerVersion,
-    int Attempted,
-    int Passed,
-    int Failed,
-    IReadOnlyList<MapperOutcome> HeaderMappers);
-
 public sealed record QualificationReport(
     int SchemaVersion,
     bool Succeeded,
@@ -118,12 +107,11 @@ public sealed record QualificationReport(
     long MaximumRomElapsedMilliseconds,
     IReadOnlyList<BackendIdentity> Backends,
     QualificationBounds Bounds,
-    ExpectedCohort Expected,
-    IndependentSmokeCoverage IndependentSmoke);
+    ExpectedCohort Expected);
 
 public static class AggregateJson
 {
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
 
     private static readonly JsonSerializerOptions Options = new()
     {

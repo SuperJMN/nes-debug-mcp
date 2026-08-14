@@ -21,7 +21,7 @@ public sealed class WorkerProtocolTests
     }
 
     [Fact]
-    public void Worker_request_rejects_missing_old_and_unknown_launch_mode_contracts()
+    public void Worker_request_rejects_missing_and_old_schema_contracts()
     {
         var request = CreateRequest();
         using var valid = JsonDocument.Parse(WorkerProtocol.SerializeRequest(request));
@@ -30,11 +30,9 @@ public sealed class WorkerProtocolTests
             .Where(property => property.Name != "schemaVersion")
             .ToDictionary(property => property.Name, property => property.Value.Clone());
         var oldSchema = request with { SchemaVersion = 1 };
-        var unknownLaunch = request with { LaunchMode = (QualificationLaunchMode)99 };
 
         Assert.False(WorkerProtocol.TryDeserializeRequest(JsonSerializer.SerializeToUtf8Bytes(withoutSchema), out _));
         Assert.False(WorkerProtocol.TryDeserializeRequest(WorkerProtocol.SerializeRequest(oldSchema), out _));
-        Assert.False(WorkerProtocol.TryDeserializeRequest(WorkerProtocol.SerializeRequest(unknownLaunch), out _));
     }
 
     [Fact]
@@ -105,8 +103,7 @@ public sealed class WorkerProtocolTests
 
         var result = QualificationCoordinator.InterpretWorkerResult(
             process,
-            headerMapper: 0,
-            QualificationBackend.AprNes);
+            headerMapper: 0);
 
         Assert.True(result.Passed);
         Assert.Null(result.FailureCategory);
@@ -219,7 +216,6 @@ public sealed class WorkerProtocolTests
         "staging.nes",
         "state.tmp",
         "server.dll",
-        QualificationLaunchMode.PrimaryDefault,
         new QualificationBounds(30, 10, 1024 * 1024, 4, 10000, 128));
 
     private static QualificationReport CreateReport() => new(
@@ -237,13 +233,5 @@ public sealed class WorkerProtocolTests
         1,
         [new BackendIdentity(QualificationBackend.AprNes, "backend", "server")],
         new QualificationBounds(30, 10, 1024 * 1024, 4, 10000, 128),
-        new ExpectedCohort(1, new SortedDictionary<int, int> { [0] = 1 }),
-        new IndependentSmokeCoverage(
-            QualificationBackend.Adnes,
-            "backend",
-            "server",
-            1,
-            1,
-            0,
-            [new MapperOutcome(0, 1, 1, 0)]));
+        new ExpectedCohort(1, new SortedDictionary<int, int> { [0] = 1 }));
 }

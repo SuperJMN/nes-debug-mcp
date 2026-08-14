@@ -34,6 +34,13 @@ public sealed class PackagedAprNesStdioSmokeTests
         Assert.True(pack.ExitCode == 0, $"dotnet pack failed.\nstdout:\n{pack.Stdout}\nstderr:\n{pack.Stderr}");
 
         var package = Assert.Single(Directory.GetFiles(packageDirectory, "Nes.Mcp.*.nupkg"));
+        using (var archive = ZipFile.OpenRead(package))
+        {
+            Assert.DoesNotContain(
+                archive.Entries,
+                entry => entry.FullName.Contains("adnes", StringComparison.OrdinalIgnoreCase));
+        }
+
         ZipFile.ExtractToDirectory(package, extractedDirectory);
         var serverAssembly = Directory.GetFiles(extractedDirectory, "Nes.Mcp.dll", SearchOption.AllDirectories).Single();
 
@@ -209,6 +216,33 @@ public sealed class PackagedAprNesStdioSmokeTests
                 await server.WaitForExitAsync();
             }
         }
+
+        using var retiredBackend = StartServerWithRetiredBackend(serverAssembly, repositoryRoot);
+        retiredBackend.StandardInput.Close();
+        var retiredStdout = retiredBackend.StandardOutput.ReadToEndAsync();
+        var retiredStderr = retiredBackend.StandardError.ReadToEndAsync();
+        try
+        {
+            await retiredBackend.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            if (!retiredBackend.HasExited)
+            {
+                retiredBackend.Kill(entireProcessTree: true);
+                await retiredBackend.WaitForExitAsync();
+            }
+        }
+
+        var rejectedStdout = await retiredStdout;
+        var rejection = await retiredStderr;
+        Assert.NotEqual(0, retiredBackend.ExitCode);
+        AssertJsonLines(rejectedStdout);
+        Assert.Contains("backend 'adnes' has been removed", rejection, StringComparison.Ordinal);
+        Assert.Contains("AprNes is the only supported backend", rejection, StringComparison.Ordinal);
+        Assert.Contains("unset", rejection, StringComparison.Ordinal);
+        Assert.Contains("'auto'", rejection, StringComparison.Ordinal);
+        Assert.Contains("'aprnes'", rejection, StringComparison.Ordinal);
     }
 
     private static Process StartServer(string serverAssembly, string workingDirectory)
@@ -223,6 +257,22 @@ public sealed class PackagedAprNesStdioSmokeTests
         };
         startInfo.ArgumentList.Add(serverAssembly);
         startInfo.Environment.Remove("NES_MCP_EMULATOR_BACKEND");
+        var process = Process.Start(startInfo);
+        return process ?? throw new InvalidOperationException("Failed to start the packaged MCP server.");
+    }
+
+    private static Process StartServerWithRetiredBackend(string serverAssembly, string workingDirectory)
+    {
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add(serverAssembly);
+        startInfo.Environment["NES_MCP_EMULATOR_BACKEND"] = "adnes";
         var process = Process.Start(startInfo);
         return process ?? throw new InvalidOperationException("Failed to start the packaged MCP server.");
     }

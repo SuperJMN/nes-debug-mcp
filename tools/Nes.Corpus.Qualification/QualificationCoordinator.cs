@@ -9,8 +9,6 @@ internal sealed record WorkerExecution(WorkerResult Result, long WallElapsedMill
 
 internal static class QualificationCoordinator
 {
-    private static readonly int[] IndependentMappers = [0, 1, 2, 3];
-
     public static async Task<QualificationRun> RunAsync(
         QualificationOptions options,
         CancellationToken cancellationToken)
@@ -36,7 +34,6 @@ internal static class QualificationCoordinator
             var execution = await RunWorkerAsync(
                 candidate,
                 options,
-                QualificationLaunchMode.PrimaryDefault,
                 cancellationToken).ConfigureAwait(false);
             maximumElapsed = Math.Max(maximumElapsed, execution.WallElapsedMilliseconds);
             var counter = mapperCounters[candidate.Header.HeaderMapper];
@@ -64,57 +61,8 @@ internal static class QualificationCoordinator
             failures.Add(FailureCategory.ProtocolViolation, null);
         }
 
-        var independentCounters = IndependentMappers.ToDictionary(
-            mapper => mapper,
-            mapper => new MutableMapperOutcome(mapper));
-        string? adnesBackendVersion = null;
-        string? adnesServerVersion = null;
-        foreach (var mapper in IndependentMappers)
-        {
-            var candidate = SelectIndependentCandidate(discovery.Candidates, mapper);
-            if (candidate is null)
-            {
-                failures.Add(FailureCategory.MissingCoverage, mapper);
-                continue;
-            }
-
-            var execution = await RunWorkerAsync(
-                candidate,
-                options,
-                QualificationLaunchMode.Adnes,
-                cancellationToken).ConfigureAwait(false);
-            maximumElapsed = Math.Max(maximumElapsed, execution.WallElapsedMilliseconds);
-            var counter = independentCounters[mapper];
-            counter.Attempted++;
-            if (execution.Result.Passed)
-            {
-                if (adnesBackendVersion is not null &&
-                    (adnesBackendVersion != execution.Result.BackendVersion ||
-                     adnesServerVersion != execution.Result.ServerVersion))
-                {
-                    counter.Failed++;
-                    failures.Add(FailureCategory.ProtocolViolation, mapper);
-                }
-                else
-                {
-                    counter.Passed++;
-                    adnesBackendVersion = execution.Result.BackendVersion;
-                    adnesServerVersion = execution.Result.ServerVersion;
-                }
-            }
-            else
-            {
-                counter.Failed++;
-                failures.Add(execution.Result.FailureCategory ?? FailureCategory.IndependentSmoke, mapper);
-            }
-        }
-
         totalStopwatch.Stop();
         var mapperOutcomes = mapperCounters.Values
-            .OrderBy(counter => counter.HeaderMapper)
-            .Select(counter => counter.ToImmutable())
-            .ToArray();
-        var independentOutcomes = independentCounters.Values
             .OrderBy(counter => counter.HeaderMapper)
             .Select(counter => counter.ToImmutable())
             .ToArray();
@@ -126,8 +74,7 @@ internal static class QualificationCoordinator
             aprNesIdentities.Add(new BackendIdentity(QualificationBackend.AprNes, "unavailable", "unavailable"));
         }
 
-        var succeeded = failed == 0 && failures.Count == 0 &&
-            independentOutcomes.All(outcome => outcome is { Attempted: 1, Passed: 1, Failed: 0 });
+        var succeeded = failed == 0 && failures.Count == 0;
         var report = new QualificationReport(
             AggregateJson.SchemaVersion,
             succeeded,
@@ -149,21 +96,12 @@ internal static class QualificationCoordinator
                 .ThenBy(identity => identity.ServerVersion, StringComparer.Ordinal)
                 .ToArray(),
             options.Bounds,
-            options.Expected,
-            new IndependentSmokeCoverage(
-                QualificationBackend.Adnes,
-                adnesBackendVersion ?? "unavailable",
-                adnesServerVersion ?? "unavailable",
-                independentOutcomes.Sum(outcome => outcome.Attempted),
-                independentOutcomes.Sum(outcome => outcome.Passed),
-                independentOutcomes.Sum(outcome => outcome.Failed),
-                independentOutcomes));
+            options.Expected);
         return new QualificationRun(report, succeeded);
     }
 
     public static QualificationRun CreateClosedFailure(QualificationOptions options)
     {
-        var independent = IndependentMappers.Select(mapper => new MapperOutcome(mapper, 0, 0, 0)).ToArray();
         var report = new QualificationReport(
             AggregateJson.SchemaVersion,
             false,
@@ -179,36 +117,18 @@ internal static class QualificationCoordinator
             0,
             [new BackendIdentity(QualificationBackend.AprNes, "unavailable", "unavailable")],
             options.Bounds,
-            options.Expected,
-            new IndependentSmokeCoverage(
-                QualificationBackend.Adnes,
-                "unavailable",
-                "unavailable",
-                0,
-                0,
-                0,
-                independent));
+            options.Expected);
         return new QualificationRun(report, false);
     }
-
-    internal static RomCandidate? SelectIndependentCandidate(
-        IReadOnlyList<RomCandidate> candidates,
-        int headerMapper) => candidates.FirstOrDefault(candidate =>
-            candidate.Header.HeaderMapper == headerMapper &&
-            !candidate.Header.HasTrainer &&
-            candidate.Header.Format == NesImageFormat.INes);
 
     private static async Task<WorkerExecution> RunWorkerAsync(
         RomCandidate candidate,
         QualificationOptions options,
-        QualificationLaunchMode launchMode,
         CancellationToken cancellationToken)
     {
-        var backend = ObservedBackend(launchMode);
         var artifacts = TempArtifacts.Create();
         WorkerResult workerResult = FailureResult(
             candidate.Header.HeaderMapper,
-            backend,
             FailureCategory.WorkerCrash,
             0);
         long elapsed = 0;
@@ -225,7 +145,6 @@ internal static class QualificationCoordinator
                 artifacts.ImagePath,
                 artifacts.StatePath,
                 options.ServerAssembly,
-                launchMode,
                 options.Bounds);
             var process = await BoundedProcessRunner.RunAsync(
                 CreateWorkerStartInfo(),
@@ -234,13 +153,12 @@ internal static class QualificationCoordinator
                 WorkerProtocol.SerializeRequest(request),
                 cancellationToken).ConfigureAwait(false);
             elapsed = process.ElapsedMilliseconds;
-            workerResult = InterpretWorkerResult(process, candidate.Header.HeaderMapper, backend);
+            workerResult = InterpretWorkerResult(process, candidate.Header.HeaderMapper);
         }
         catch
         {
             workerResult = FailureResult(
                 candidate.Header.HeaderMapper,
-                backend,
                 FailureCategory.WorkerCrash,
                 elapsed);
         }
@@ -264,17 +182,9 @@ internal static class QualificationCoordinator
         return new WorkerExecution(workerResult, elapsed);
     }
 
-    private static QualificationBackend ObservedBackend(QualificationLaunchMode launchMode) => launchMode switch
-    {
-        QualificationLaunchMode.PrimaryDefault => QualificationBackend.AprNes,
-        QualificationLaunchMode.Adnes => QualificationBackend.Adnes,
-        _ => throw new ArgumentOutOfRangeException(nameof(launchMode)),
-    };
-
     internal static WorkerResult InterpretWorkerResult(
         BoundedProcessResult process,
-        int headerMapper,
-        QualificationBackend backend)
+        int headerMapper)
     {
         var category = process.CleanupTimedOut
             ? FailureCategory.WorkerTimeout
@@ -292,11 +202,11 @@ internal static class QualificationCoordinator
             !WorkerProtocol.TryDeserializeResult(process.StandardOutput, out var parsed) ||
             parsed is null ||
             parsed.HeaderMapper != headerMapper ||
-            parsed.Backend != backend ||
+            parsed.Backend != QualificationBackend.AprNes ||
             process.ExitCode != (parsed.Passed ? 0 : 1) ||
             parsed.Passed && (parsed.BackendVersion is null || parsed.ServerVersion is null))
         {
-            return FailureResult(headerMapper, backend, category ?? FailureCategory.ProtocolViolation, process.ElapsedMilliseconds);
+            return FailureResult(headerMapper, category ?? FailureCategory.ProtocolViolation, process.ElapsedMilliseconds);
         }
 
         return parsed;
@@ -304,7 +214,6 @@ internal static class QualificationCoordinator
 
     private static WorkerResult FailureResult(
         int headerMapper,
-        QualificationBackend backend,
         FailureCategory category,
         long elapsedMilliseconds) => new(
             WorkerProtocol.SchemaVersion,
@@ -312,7 +221,7 @@ internal static class QualificationCoordinator
             category,
             headerMapper,
             elapsedMilliseconds,
-            backend,
+            QualificationBackend.AprNes,
             null,
             null);
 
@@ -321,6 +230,7 @@ internal static class QualificationCoordinator
         var startInfo = new ProcessStartInfo("dotnet");
         startInfo.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
         startInfo.ArgumentList.Add("worker");
+        startInfo.Environment.Remove("NES_MCP_EMULATOR_BACKEND");
         return startInfo;
     }
 

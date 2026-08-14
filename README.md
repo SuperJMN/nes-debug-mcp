@@ -32,13 +32,7 @@ The default invocation above needs no backend configuration. `aprnes` is an equi
 NES_MCP_EMULATOR_BACKEND=aprnes dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
 ```
 
-The vendored MIT-licensed [ADNES](https://github.com/enusbaum/ADNES) backend remains available only as a temporary, explicit recovery option:
-
-```bash
-NES_MCP_EMULATOR_BACKEND=adnes dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
-```
-
-Valid configured values are `auto`, `aprnes`, and `adnes`; leaving the variable unset is the recommended default. An invalid value fails during startup with the accepted choices instead of deferring the error to the first tool call.
+Valid configured values are `auto` and `aprnes`; leaving the variable unset is the recommended default. The retired `adnes` value and any unknown value fail immediately during startup with migration guidance to unset the variable or use `auto`/`aprnes`.
 
 ## Connect An MCP Client
 
@@ -129,8 +123,7 @@ See [docs/mcp-tools.md](docs/mcp-tools.md) for schemas and examples.
 
 ## Current Limitations
 
-- ADNES remains packaged as a temporary explicit fallback for reversibility, but it does not implement continuous PPU-register tracing or correlated execution observation and is planned for removal.
-- Debug stepping, conditional breakpoints, and watchpoints are implemented in the managed session loop around each backend.
+- Debug stepping, conditional breakpoints, and watchpoints are implemented by the AprNes debug session.
 - Disassembly is intentionally small and currently covers the opcodes most useful for first smoke/debug work; unknown opcodes are returned as `.db`.
 - Symbol parsing is intentionally simple: `BANK:ADDR Name` and `ADDR Name` lines with `;` or `#` comments.
 - Savestates are debugger snapshots, not a stable long-term archival format. They should be treated as version-bound to the current backend implementation.
@@ -148,7 +141,6 @@ See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for attribution, license no
 
 The main local license files are:
 
-- [src/Nes.Debug.Emulator/ADNES-LICENSE.txt](src/Nes.Debug.Emulator/ADNES-LICENSE.txt)
 - [src/Nes.Debug.Emulator/AprNes/APRNES-LICENSE.txt](src/Nes.Debug.Emulator/AprNes/APRNES-LICENSE.txt)
 - [src/Nes.Debug.Emulator/AprNes/TRICNES-LICENSE.txt](src/Nes.Debug.Emulator/AprNes/TRICNES-LICENSE.txt)
 - [src/Nes.Debug.Emulator/AprNes/MESEN2-GPL-3.0-LICENSE.txt](src/Nes.Debug.Emulator/AprNes/MESEN2-GPL-3.0-LICENSE.txt)

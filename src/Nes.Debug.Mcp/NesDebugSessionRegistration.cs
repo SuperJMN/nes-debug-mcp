@@ -6,7 +6,7 @@ namespace Nes.Debug.Mcp;
 
 /// <summary>
 /// Registers the <see cref="INesDebugSession"/> backend selected by the
-/// <c>NES_MCP_EMULATOR_BACKEND</c> environment variable ("auto", "aprnes", or "adnes").
+/// <c>NES_MCP_EMULATOR_BACKEND</c> environment variable ("auto" or "aprnes").
 /// </summary>
 public static class NesDebugSessionRegistration
 {
@@ -19,16 +19,16 @@ public static class NesDebugSessionRegistration
                 return AddAprNesSession(services);
 
             case "adnes":
-                services.AddSingleton<ManagedNesDebugSession>();
-                services.AddSingleton<INesDebugSession>(provider =>
-                    new SynchronizedNesDebugSession(provider.GetRequiredService<ManagedNesDebugSession>()));
-                return services;
+                throw new InvalidOperationException(
+                    "NES emulator backend 'adnes' has been removed. " +
+                    "AprNes is the only supported backend. " +
+                    "Leave NES_MCP_EMULATOR_BACKEND unset, or use 'auto' or 'aprnes'.");
 
             default:
                 throw new InvalidOperationException(
                     $"Unsupported NES emulator backend '{backend}'. " +
-                    "Leave NES_MCP_EMULATOR_BACKEND unset, use legacy alias 'auto' or 'aprnes', " +
-                    "or use the temporary 'adnes' fallback.");
+                    "AprNes is the only supported backend. " +
+                    "Leave NES_MCP_EMULATOR_BACKEND unset, or use 'auto' or 'aprnes'.");
         }
     }
 
