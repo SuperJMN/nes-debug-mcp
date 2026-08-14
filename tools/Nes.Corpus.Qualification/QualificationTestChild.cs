@@ -117,10 +117,6 @@ internal static class QualificationTestChild
             var tool = root.GetProperty("params").GetProperty("name").GetString();
             object result = tool switch
             {
-                "backend" => TextResult(new
-                {
-                    backend = Environment.GetEnvironmentVariable("NES_MCP_EMULATOR_BACKEND"),
-                }),
                 "json" => TextResult(new { value = 7 }),
                 "error" => new
                 {

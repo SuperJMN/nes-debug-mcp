@@ -149,7 +149,7 @@ Operators are `==`, `!=`, `<`, `<=`, `>`, and `>=`.
 
   At most 10,000 events are returned. Execution continues to its frame/breakpoint bound after that cap; `eventsObserved` reports the full selected-write count and `truncated` reports that the event payload was capped. `eventCount` is the number actually returned.
 - `dump_oam`: dumps 64 OAM sprite entries.
-- `read_ppu_state`: reads raw `ppuctrl`, `ppumask`, `ppustatus`, and `oamaddr`; decoded `control`, `mask`, and `status` bits; authoritative loopy scrolling/address state `v`, `t`, `x`, and `w`; scanline/dot, VBlank, rendering state, NMI state, PPU-cycle count, and timeline. `v` is the current VRAM address, `t` is the temporary VRAM address, `x` is fine-X scroll, and `w` is false for the first `$2005/$2006` write and true for the second. The legacy `ppuaddr` field aliases `v`; legacy `ppuscroll` is null because `t` alone is not a valid scroll value. The legacy `cycle` field is the current PPU dot.
+- `read_ppu_state`: reads raw `ppuctrl`, `ppumask`, `ppustatus`, and `oamaddr`; decoded `control`, `mask`, and `status` bits; authoritative loopy scrolling/address state `v`, `t`, `x`, and `w`; scanline/dot, VBlank, rendering state, NMI state, PPU-cycle count, and timeline. `v` is the current VRAM address, `t` is the temporary VRAM address, `x` is fine-X scroll, and `w` is false for the first `$2005/$2006` write and true for the second.
 - `read_screen_region`: reads deterministic palette-index data and row hashes from a bounded 256x240 screen region. `palette_indices` returns raw `values` automatically for regions up to 1,024 pixels and otherwise returns a compact histogram plus row hashes. Use `palette_indices_raw` to explicitly return every palette index for a larger region, including a full 256x240 frame (61,440 values).
   ```json
   { "x": 0, "y": 0, "width": 16, "height": 16, "format": "palette_indices" }
@@ -185,4 +185,4 @@ Savestates make repeated observations deterministic within the same backend and 
 
 ## Backend Support
 
-AprNes is the only backend. `read_ppu_state`, `read_screen_region`, `observe_screen`, nametable dumps, `trace_ppu_register_writes`, and `observe_execution` all use that same session. The retired `adnes` configuration value fails during startup with guidance to unset `NES_MCP_EMULATOR_BACKEND` or use `auto`/`aprnes`.
+AprNes is the only backend. `read_ppu_state`, `read_screen_region`, `observe_screen`, nametable dumps, `trace_ppu_register_writes`, and `observe_execution` all use that same session.

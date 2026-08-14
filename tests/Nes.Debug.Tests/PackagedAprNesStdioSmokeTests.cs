@@ -217,32 +217,6 @@ public sealed class PackagedAprNesStdioSmokeTests
             }
         }
 
-        using var retiredBackend = StartServerWithRetiredBackend(serverAssembly, repositoryRoot);
-        retiredBackend.StandardInput.Close();
-        var retiredStdout = retiredBackend.StandardOutput.ReadToEndAsync();
-        var retiredStderr = retiredBackend.StandardError.ReadToEndAsync();
-        try
-        {
-            await retiredBackend.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-        }
-        finally
-        {
-            if (!retiredBackend.HasExited)
-            {
-                retiredBackend.Kill(entireProcessTree: true);
-                await retiredBackend.WaitForExitAsync();
-            }
-        }
-
-        var rejectedStdout = await retiredStdout;
-        var rejection = await retiredStderr;
-        Assert.NotEqual(0, retiredBackend.ExitCode);
-        AssertJsonLines(rejectedStdout);
-        Assert.Contains("backend 'adnes' has been removed", rejection, StringComparison.Ordinal);
-        Assert.Contains("AprNes is the only supported backend", rejection, StringComparison.Ordinal);
-        Assert.Contains("unset", rejection, StringComparison.Ordinal);
-        Assert.Contains("'auto'", rejection, StringComparison.Ordinal);
-        Assert.Contains("'aprnes'", rejection, StringComparison.Ordinal);
     }
 
     private static Process StartServer(string serverAssembly, string workingDirectory)
@@ -256,23 +230,6 @@ public sealed class PackagedAprNesStdioSmokeTests
             UseShellExecute = false,
         };
         startInfo.ArgumentList.Add(serverAssembly);
-        startInfo.Environment.Remove("NES_MCP_EMULATOR_BACKEND");
-        var process = Process.Start(startInfo);
-        return process ?? throw new InvalidOperationException("Failed to start the packaged MCP server.");
-    }
-
-    private static Process StartServerWithRetiredBackend(string serverAssembly, string workingDirectory)
-    {
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            WorkingDirectory = workingDirectory,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        startInfo.ArgumentList.Add(serverAssembly);
-        startInfo.Environment["NES_MCP_EMULATOR_BACKEND"] = "adnes";
         var process = Process.Start(startInfo);
         return process ?? throw new InvalidOperationException("Failed to start the packaged MCP server.");
     }

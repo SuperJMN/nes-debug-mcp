@@ -22,7 +22,7 @@ public sealed record ResetResult([property: JsonPropertyName("reset")] bool Rese
 public sealed record TimelineCounters(
     [property: JsonPropertyName("frames")] ulong Frames,
     [property: JsonPropertyName("cycles")] ulong Cycles,
-    [property: JsonPropertyName("instructions")] ulong Instructions = 0);
+    [property: JsonPropertyName("instructions")] ulong Instructions);
 
 public sealed record StepInstructionResult(
     [property: JsonPropertyName("pcBefore")] string PcBefore,
@@ -30,26 +30,14 @@ public sealed record StepInstructionResult(
     [property: JsonPropertyName("registers")] NesCpuRegisters Registers,
     [property: JsonPropertyName("disassembly")] string Disassembly,
     [property: JsonPropertyName("instructionsRun")] int InstructionsRun,
-    [property: JsonPropertyName("timeline")] TimelineCounters Timeline)
-{
-    public StepInstructionResult(string pcBefore, string pcAfter, NesCpuRegisters registers, string disassembly)
-        : this(pcBefore, pcAfter, registers, disassembly, 1, new TimelineCounters(0, 0))
-    {
-    }
-}
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
 
 public sealed record RunFrameResult(
     [property: JsonPropertyName("framesRun")] int FramesRun,
     [property: JsonPropertyName("totalFrames")] long TotalFrames,
     [property: JsonPropertyName("registers")] NesCpuRegisters Registers,
     [property: JsonPropertyName("hitBreakpoint")] bool HitBreakpoint,
-    [property: JsonPropertyName("timeline")] TimelineCounters Timeline)
-{
-    public RunFrameResult(int framesRun, long totalFrames, NesCpuRegisters registers, bool hitBreakpoint)
-        : this(framesRun, totalFrames, registers, hitBreakpoint, new TimelineCounters((ulong)Math.Max(0, totalFrames), 0))
-    {
-    }
-}
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
 
 public enum NesButton
 {
@@ -85,13 +73,7 @@ public sealed record ContinueResult(
     [property: JsonPropertyName("pc")] string Pc,
     [property: JsonPropertyName("registers")] NesCpuRegisters Registers,
     [property: JsonPropertyName("timeline")] TimelineCounters Timeline,
-    [property: JsonPropertyName("instructionsRun")] ulong InstructionsRun)
-{
-    public ContinueResult(bool stopped, string reason, string pc, NesCpuRegisters registers)
-        : this(stopped, reason, pc, registers, new TimelineCounters(0, 0), 0)
-    {
-    }
-}
+    [property: JsonPropertyName("instructionsRun")] ulong InstructionsRun);
 
 public sealed record BreakpointSetResult(
     [property: JsonPropertyName("breakpointId")] string BreakpointId,
@@ -121,13 +103,7 @@ public sealed record WatchpointSetResult(
     [property: JsonPropertyName("address")] string Address,
     [property: JsonPropertyName("mode")] string Mode,
     [property: JsonPropertyName("enabled")] bool Enabled,
-    [property: JsonPropertyName("length")] int Length)
-{
-    public WatchpointSetResult(string watchpointId, string address, string mode, bool enabled)
-        : this(watchpointId, address, mode, enabled, 1)
-    {
-    }
-}
+    [property: JsonPropertyName("length")] int Length);
 
 public sealed record ClearWatchpointResult([property: JsonPropertyName("cleared")] bool Cleared);
 
@@ -139,13 +115,7 @@ public sealed record WatchpointEntry(
     [property: JsonPropertyName("address")] string Address,
     [property: JsonPropertyName("mode")] string Mode,
     [property: JsonPropertyName("enabled")] bool Enabled,
-    [property: JsonPropertyName("length")] int Length)
-{
-    public WatchpointEntry(string id, string address, string mode, bool enabled)
-        : this(id, address, mode, enabled, 1)
-    {
-    }
-}
+    [property: JsonPropertyName("length")] int Length);
 
 public sealed record SessionStateResult(
     [property: JsonPropertyName("romLoaded")] bool RomLoaded,
@@ -155,11 +125,6 @@ public sealed record SessionStateResult(
     [property: JsonPropertyName("totalFrames")] long TotalFrames,
     [property: JsonPropertyName("timeline")] TimelineCounters Timeline)
 {
-    public SessionStateResult(bool romLoaded, string? title, int? mapper, string? pc, long totalFrames)
-        : this(romLoaded, title, mapper, pc, totalFrames, new TimelineCounters((ulong)Math.Max(0, totalFrames), 0))
-    {
-    }
-
     [JsonPropertyName("serverVersion")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ServerVersion { get; init; }
@@ -228,46 +193,23 @@ public sealed record PpuStateResult(
     [property: JsonPropertyName("ppumask")] string PpuMask,
     [property: JsonPropertyName("ppustatus")] string PpuStatus,
     [property: JsonPropertyName("oamaddr")] string OamAddr,
-    [property: JsonPropertyName("ppuaddr")] string PpuAddr,
-    [property: JsonPropertyName("ppuscroll")] string? PpuScroll,
+    [property: JsonPropertyName("v")] string V,
+    [property: JsonPropertyName("t")] string T,
+    [property: JsonPropertyName("x")] int X,
+    [property: JsonPropertyName("w")] bool W,
     [property: JsonPropertyName("scanline")] int Scanline,
-    [property: JsonPropertyName("cycle")] int Cycle,
+    [property: JsonPropertyName("dot")] int Dot,
     [property: JsonPropertyName("nmi")] bool Nmi,
     [property: JsonPropertyName("renderingEnabled")] bool RenderingEnabled,
     [property: JsonPropertyName("spritesEnabled")] bool SpritesEnabled,
     [property: JsonPropertyName("backgroundEnabled")] bool BackgroundEnabled,
-    [property: JsonPropertyName("ppuCycles")] long PpuCycles)
-{
-    [JsonPropertyName("v")]
-    public string V { get; init; } = "0x0000";
-
-    [JsonPropertyName("t")]
-    public string T { get; init; } = "0x0000";
-
-    [JsonPropertyName("x")]
-    public int X { get; init; }
-
-    [JsonPropertyName("w")]
-    public bool W { get; init; }
-
-    [JsonPropertyName("vblank")]
-    public bool VBlank { get; init; }
-
-    [JsonPropertyName("renderingActive")]
-    public bool RenderingActive { get; init; }
-
-    [JsonPropertyName("control")]
-    public PpuControlState Control { get; init; } = new(0, "0x2000", 1, "0x0000", "0x0000", "8x8", false);
-
-    [JsonPropertyName("mask")]
-    public PpuMaskState Mask { get; init; } = new(false, false, false, false, false, false, false, false);
-
-    [JsonPropertyName("status")]
-    public PpuStatusState Status { get; init; } = new(false, false, false);
-
-    [JsonPropertyName("timeline")]
-    public TimelineCounters Timeline { get; init; } = new(0, 0);
-}
+    [property: JsonPropertyName("ppuCycles")] long PpuCycles,
+    [property: JsonPropertyName("vblank")] bool VBlank,
+    [property: JsonPropertyName("renderingActive")] bool RenderingActive,
+    [property: JsonPropertyName("control")] PpuControlState Control,
+    [property: JsonPropertyName("mask")] PpuMaskState Mask,
+    [property: JsonPropertyName("status")] PpuStatusState Status,
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
 
 public sealed record PpuControlState(
     [property: JsonPropertyName("nametableSelect")] int NametableSelect,
@@ -308,13 +250,7 @@ public sealed record TraceUntilWriteResult(
     [property: JsonPropertyName("value")] string? Value,
     [property: JsonPropertyName("instructionsRun")] uint InstructionsRun,
     [property: JsonPropertyName("registers")] NesCpuRegisters Registers,
-    [property: JsonPropertyName("timeline")] TimelineCounters Timeline)
-{
-    public TraceUntilWriteResult(bool stopped, string reason, string address, string? pc, string? value, uint instructionsRun, NesCpuRegisters registers)
-        : this(stopped, reason, address, pc, value, instructionsRun, registers, new TimelineCounters(0, 0))
-    {
-    }
-}
+    [property: JsonPropertyName("timeline")] TimelineCounters Timeline);
 
 public sealed record LastWritersResult(
     [property: JsonPropertyName("writers")] IReadOnlyList<LastWriterResult> Writers);
@@ -536,13 +472,7 @@ public sealed record TilemapDumpResult(
     [property: JsonPropertyName("height")] int Height,
     [property: JsonPropertyName("rows")] IReadOnlyList<string> Rows,
     [property: JsonPropertyName("attributeAddress")] string AttributeAddress,
-    [property: JsonPropertyName("attributeRows")] IReadOnlyList<string> AttributeRows)
-{
-    public TilemapDumpResult(string address, int width, int height, IReadOnlyList<string> rows)
-        : this(address, width, height, rows, "", [])
-    {
-    }
-}
+    [property: JsonPropertyName("attributeRows")] IReadOnlyList<string> AttributeRows);
 
 public sealed record NametableDumpResult(
     [property: JsonPropertyName("detailsIncluded")] bool DetailsIncluded,

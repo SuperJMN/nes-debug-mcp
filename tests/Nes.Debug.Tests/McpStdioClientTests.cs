@@ -43,38 +43,16 @@ public sealed class McpStdioClientTests
         Assert.NotNull(client);
 
         Assert.True(await client.InitializeAsync(CancellationToken.None));
-        var backend = await client.CallJsonAsync("backend", new { }, CancellationToken.None);
         var json = await client.CallJsonAsync("json", new { }, CancellationToken.None);
         var error = await client.CallJsonAsync("error", new { }, CancellationToken.None);
         var image = await client.CallImageAsync("image", new { }, CancellationToken.None);
 
-        Assert.True(backend.IsSuccess);
-        Assert.Equal(JsonValueKind.Null, backend.Payload.GetProperty("backend").ValueKind);
         Assert.True(json.IsSuccess);
         Assert.Equal(7, json.Payload.GetProperty("value").GetInt32());
         Assert.False(error.IsSuccess);
         Assert.True(image.IsSuccess);
         Assert.Equal("image/png", image.MimeType);
         Assert.True(PngValidator.IsNesFrame(image.Data));
-        Assert.True(await client.StopAsync(CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task Primary_default_removes_an_inherited_backend_variable_before_starting_the_server()
-    {
-        var startInfo = QualificationTestChild.CreateMcpStartInfo("valid");
-        startInfo.Environment["NES_MCP_EMULATOR_BACKEND"] = "aprnes";
-        Assert.True(startInfo.Environment.ContainsKey("NES_MCP_EMULATOR_BACKEND"));
-
-        await using var client = McpStdioClient.Start(startInfo);
-        Assert.NotNull(client);
-        Assert.True(await client.InitializeAsync(CancellationToken.None));
-
-        var backend = await client.CallJsonAsync("backend", new { }, CancellationToken.None);
-
-        Assert.True(backend.IsSuccess);
-        Assert.Equal(JsonValueKind.Null, backend.Payload.GetProperty("backend").ValueKind);
-        Assert.False(startInfo.Environment.ContainsKey("NES_MCP_EMULATOR_BACKEND"));
         Assert.True(await client.StopAsync(CancellationToken.None));
     }
 

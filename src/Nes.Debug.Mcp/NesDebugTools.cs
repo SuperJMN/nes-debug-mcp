@@ -912,7 +912,7 @@ public static class NesDebugTools
         var registers = session.ReadRegisters();
         var ppu = session.ReadPpuState();
         return new ScreenCaptureMetadata(
-            state.IsSuccess ? state.Value.Timeline : new TimelineCounters(0, 0),
+            state.IsSuccess ? state.Value.Timeline : new TimelineCounters(0, 0, 0),
             registers.IsSuccess ? registers.Value : null,
             ppu.IsSuccess ? ppu.Value : null,
             state.IsSuccess ? state.Value.Title : null,

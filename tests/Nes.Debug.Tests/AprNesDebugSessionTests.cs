@@ -332,7 +332,6 @@ public sealed class AprNesDebugSessionTests : NromSessionConformanceTests<AprNes
         Assert.Equal("0xFF", ppu.Value.PpuCtrl);
         Assert.Equal("0xFF", ppu.Value.PpuMask);
         Assert.Equal("0x84", ppu.Value.OamAddr);
-        Assert.Null(ppu.Value.PpuScroll);
         Assert.Equal(3, ppu.Value.Control.NametableSelect);
         Assert.Equal("0x2C00", ppu.Value.Control.NametableAddress);
         Assert.Equal(32, ppu.Value.Control.VramIncrement);
@@ -350,7 +349,7 @@ public sealed class AprNesDebugSessionTests : NromSessionConformanceTests<AprNes
         Assert.True(ppu.Value.Mask.EmphasizeBlue);
         Assert.Equal(ppu.Value.Status.VBlank, ppu.Value.VBlank);
         Assert.Equal(step.Value.Timeline, ppu.Value.Timeline);
-        Assert.Equal(ppu.Value.PpuAddr, ppu.Value.V);
+        Assert.InRange(ppu.Value.Dot, 0, 340);
     }
 
     [Fact]

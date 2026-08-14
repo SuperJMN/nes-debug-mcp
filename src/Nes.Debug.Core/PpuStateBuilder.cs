@@ -29,22 +29,19 @@ public static class PpuStateBuilder
             Hex.FormatByte(ppuStatus),
             Hex.FormatByte(oamAddr),
             Hex.FormatWord(v),
-            null,
+            Hex.FormatWord(t),
+            fineX & 0x07,
+            writeToggle,
             scanline,
             dot,
             nmi,
             renderingEnabled,
             spritesEnabled,
             backgroundEnabled,
-            ppuCycles)
-        {
-            V = Hex.FormatWord(v),
-            T = Hex.FormatWord(t),
-            X = fineX & 0x07,
-            W = writeToggle,
-            VBlank = vblank,
-            RenderingActive = renderingEnabled && (scanline is >= 0 and < 240 or 261),
-            Control = new PpuControlState(
+            ppuCycles,
+            vblank,
+            renderingEnabled && (scanline is >= 0 and < 240 or 261),
+            new PpuControlState(
                 nametableSelect,
                 Hex.FormatWord((ushort)(0x2000 + nametableSelect * 0x400)),
                 (ppuCtrl & 0x04) != 0 ? 32 : 1,
@@ -52,7 +49,7 @@ public static class PpuStateBuilder
                 (ppuCtrl & 0x10) != 0 ? "0x1000" : "0x0000",
                 (ppuCtrl & 0x20) != 0 ? "8x16" : "8x8",
                 (ppuCtrl & 0x80) != 0),
-            Mask = new PpuMaskState(
+            new PpuMaskState(
                 (ppuMask & 0x01) != 0,
                 (ppuMask & 0x02) != 0,
                 (ppuMask & 0x04) != 0,
@@ -61,11 +58,10 @@ public static class PpuStateBuilder
                 (ppuMask & 0x20) != 0,
                 (ppuMask & 0x40) != 0,
                 (ppuMask & 0x80) != 0),
-            Status = new PpuStatusState(
+            new PpuStatusState(
                 (ppuStatus & 0x20) != 0,
                 (ppuStatus & 0x40) != 0,
                 vblank),
-            Timeline = timeline,
-        };
+            timeline);
     }
 }

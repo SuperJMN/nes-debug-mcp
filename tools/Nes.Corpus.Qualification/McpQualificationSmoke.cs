@@ -409,8 +409,13 @@ internal static class McpQualificationSmoke
         TryGetString(payload, "ppuctrl", out _) &&
         TryGetString(payload, "ppumask", out _) &&
         TryGetString(payload, "ppustatus", out _) &&
+        TryGetString(payload, "v", out _) &&
+        TryGetString(payload, "t", out _) &&
+        payload.TryGetProperty("x", out var fineX) && fineX.ValueKind == JsonValueKind.Number &&
+        payload.TryGetProperty("w", out var writeToggle) &&
+            writeToggle.ValueKind is JsonValueKind.True or JsonValueKind.False &&
         payload.TryGetProperty("scanline", out var scanline) && scanline.ValueKind == JsonValueKind.Number &&
-        payload.TryGetProperty("cycle", out var cycle) && cycle.ValueKind == JsonValueKind.Number;
+        payload.TryGetProperty("dot", out var dot) && dot.ValueKind == JsonValueKind.Number;
 
     private static bool TryReadTimeline(JsonElement payload, out TimelineSnapshot timeline)
     {

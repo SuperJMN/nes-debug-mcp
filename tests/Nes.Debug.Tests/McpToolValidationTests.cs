@@ -107,7 +107,7 @@ public sealed class McpToolValidationTests
         var session = new FakeDebugSession
         {
             GetStateResult = DebugResult<SessionStateResult>.Success(
-                new SessionStateResult(false, null, null, null, 0)
+                new SessionStateResult(false, null, null, null, 0, new TimelineCounters(0, 0, 0))
                 {
                     Backend = "AprNes",
                     BackendVersion = "test-build",
@@ -137,7 +137,7 @@ public sealed class McpToolValidationTests
         {
             ConfiguredRunFrameResult = DebugResult<RunFrameResult>.Failure("run_frame_failed", "bounded failure"),
             GetStateResult = DebugResult<SessionStateResult>.Success(
-                new SessionStateResult(true, "private-title", 4, "0x8000", 0)
+                new SessionStateResult(true, "private-title", 4, "0x8000", 0, new TimelineCounters(0, 0, 0))
                 {
                     Backend = "AprNes",
                     BackendVersion = "backend-build",
@@ -309,7 +309,7 @@ public sealed class McpToolValidationTests
         var session = new FakeDebugSession
         {
             SetWatchpointResult = DebugResult<WatchpointSetResult>.Success(
-                new WatchpointSetResult("wp-1", "0x0002", mode.ToLowerInvariant(), true)),
+                new WatchpointSetResult("wp-1", "0x0002", mode.ToLowerInvariant(), true, 1)),
         };
 
         var result = NesDebugTools.SetWatchpoint(session, "0x0002", mode);
@@ -395,7 +395,7 @@ public sealed class McpToolValidationTests
         var session = new FakeDebugSession
         {
             PpuRegisterTraceResult = DebugResult<PpuRegisterTraceResult>.Success(
-                new PpuRegisterTraceResult(2, 0, ppu, ppu, [], 0, 0, false, true, "breakpoint", new TimelineCounters(0, 0))),
+                new PpuRegisterTraceResult(2, 0, ppu, ppu, [], 0, 0, false, true, "breakpoint", new TimelineCounters(0, 0, 0))),
         };
 
         var result = NesDebugTools.TracePpuRegisterWrites(
@@ -505,16 +505,6 @@ public sealed class McpToolValidationTests
         var error = Assert.IsType<ToolError>(result);
         Assert.Equal("invalid_tilemap_address", error.Error.Code);
         Assert.False(session.DumpTilemapCalled);
-    }
-
-    [Fact]
-    public void Tilemap_result_preserves_the_legacy_four_argument_constructor()
-    {
-        var result = new TilemapDumpResult("0x2000", 32, 30, ["00"]);
-
-        Assert.Equal("0x2000", result.Address);
-        Assert.Empty(result.AttributeAddress);
-        Assert.Empty(result.AttributeRows);
     }
 
     [Fact]
@@ -697,20 +687,7 @@ public sealed class McpToolValidationTests
             0);
 
     private static PpuStateResult EmptyPpuState() =>
-        new(
-            "0x00",
-            "0x00",
-            "0x00",
-            "0x00",
-            "0x0000",
-            "0x0000",
-            0,
-            0,
-            false,
-            false,
-            false,
-            false,
-            0);
+        PpuStateBuilder.Build(0, 0, 0, 0, 0, 0, 0, false, 0, 0, false, 0, new TimelineCounters(0, 0, 0));
 
     private sealed class FakeDebugSession : INesDebugSession, IPaletteIndexFrameSource
     {
@@ -797,7 +774,7 @@ public sealed class McpToolValidationTests
 
             RunFrameCalls += count;
             return DebugResult<RunFrameResult>.Success(
-                new RunFrameResult(count, RunFrameCalls, EmptyRegisters(), false, new TimelineCounters((ulong)RunFrameCalls, 0)));
+                new RunFrameResult(count, RunFrameCalls, EmptyRegisters(), false, new TimelineCounters((ulong)RunFrameCalls, 0, 0)));
         }
 
         public int RunFrameCalls { get; private set; }
@@ -962,7 +939,7 @@ public sealed class McpToolValidationTests
 
         public DebugResult<NametableDumpResult> DumpNametables(bool includeDetails) =>
             DebugResult<NametableDumpResult>.Success(
-                new NametableDumpResult(includeDetails, [], new TimelineCounters(0, 0)));
+                new NametableDumpResult(includeDetails, [], new TimelineCounters(0, 0, 0)));
 
         public DebugResult<TilemapDumpResult> DumpTilemap(ushort address)
         {

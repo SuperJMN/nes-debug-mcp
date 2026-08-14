@@ -73,7 +73,6 @@ internal sealed class McpStdioClient : IAsyncDisposable
             startInfo.RedirectStandardOutput = true;
             startInfo.RedirectStandardError = true;
             startInfo.UseShellExecute = false;
-            startInfo.Environment.Remove("NES_MCP_EMULATOR_BACKEND");
 
             var process = Process.Start(startInfo);
             return process is null ? null : new McpStdioClient(process);

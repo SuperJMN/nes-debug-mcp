@@ -4,7 +4,7 @@
 
 The MCP server exposes CPU stepping, frame execution, deterministic controller input timelines, breakpoints/watchpoints, CPU memory reads/writes, authoritative PPU/OAM inspection, continuous PPU-register tracing, correlated screen/RAM/PPU observation, symbols, lightweight disassembly, savestates, screen-region probes, and PNG screen capture.
 
-By default, with no backend variable configured, `Nes.Mcp` directly uses the vendored [AprNes](https://github.com/erspicu/AprNes) backend for every supported ROM. The legacy `auto` value and explicit `aprnes` value select that same path; neither performs mapper-based routing. AprNes implements the complete MCP debug workflow, including continuous PPU-register tracing and correlated execution observation for mappers 0-3 and the broader supported mapper set.
+`Nes.Mcp` directly uses the vendored [AprNes](https://github.com/erspicu/AprNes) backend for every supported ROM. AprNes implements the complete MCP debug workflow, including continuous PPU-register tracing and correlated execution observation for mappers 0-3 and the broader supported mapper set.
 
 ## Build
 
@@ -25,14 +25,6 @@ From the repo root:
 ```bash
 dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
 ```
-
-The default invocation above needs no backend configuration. `aprnes` is an equivalent explicit selection:
-
-```bash
-NES_MCP_EMULATOR_BACKEND=aprnes dotnet run --project src/Nes.Debug.Mcp/Nes.Debug.Mcp.csproj
-```
-
-Valid configured values are `auto` and `aprnes`; leaving the variable unset is the recommended default. The retired `adnes` value and any unknown value fail immediately during startup with migration guidance to unset the variable or use `auto`/`aprnes`.
 
 ## Connect An MCP Client
 

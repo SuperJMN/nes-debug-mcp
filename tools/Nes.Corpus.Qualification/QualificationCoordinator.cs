@@ -230,7 +230,6 @@ internal static class QualificationCoordinator
         var startInfo = new ProcessStartInfo("dotnet");
         startInfo.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
         startInfo.ArgumentList.Add("worker");
-        startInfo.Environment.Remove("NES_MCP_EMULATOR_BACKEND");
         return startInfo;
     }
 
